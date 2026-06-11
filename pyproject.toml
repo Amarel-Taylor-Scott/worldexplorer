@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "worldexplorer"
+version = "0.1.0"
+description = "Zero-config, self-improving, overfit-resistant tabular ML: point it at a dataframe + target, it figures out everything else."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "world-explorer" }]
+keywords = ["automl", "tabular", "ensemble", "overfitting", "time-series", "kaggle"]
+dependencies = [
+    "numpy",
+    "pandas",
+    "scikit-learn",
+    "pyarrow",
+]
+
+[project.optional-dependencies]
+gpu = ["torch"]
+boost = ["lightgbm", "xgboost"]
+full = ["torch", "lightgbm", "xgboost", "scipy", "psutil"]
+
+[project.scripts]
+worldexplorer = "worldexplorer.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["worldexplorer*"]
