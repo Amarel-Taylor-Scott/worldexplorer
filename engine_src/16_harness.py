@@ -265,6 +265,24 @@ class ExplorerHarness:
         log("probe_ready", probe_rows=len(rs.keep), segments=int(len(np.unique(rs.segp))),
             embargo_rows=rs.embargo_p, splits=rs.cfg.N_SPLITS, wf_folds=rs.cfg.WF_FOLDS)
 
+        # ---- v31 TEST-LIKENESS sensor (IDEAS_ZOO B1): X-only, target-free ------
+        # Working-vs-test classifier on features alone; per-row 'looks like
+        # test' scores feed the robust selector's testlike partitions (flag)
+        # and a drift report. Labels and the leaderboard never touch this.
+        global TESTLIKE
+        TESTLIKE = None
+        if rs.cfg.TESTLIKE_REPORT or rs.cfg.TESTLIKE_PARTITIONS:
+            try:
+                TESTLIKE, rs.testlike_info = fit_testlike(rs.X_full, rs.X_test, rs.n_work, rs.cfg)
+                write_json({**rs.testlike_info,
+                            "note": "target-free working-vs-test classifier; AUC~0.5 = no shift; "
+                                    "feeds robust-selector partitions when TESTLIKE_PARTITIONS"},
+                           "testlike_report.json")
+                log("testlike_sensor", **rs.testlike_info)
+            except Exception as e:
+                TESTLIKE = None
+                log("testlike_skipped", err=str(e)[:80])
+
 
     def _build_atlas(self, rs: "_RunState") -> None:
         global ATLAS, GAUGE
@@ -291,6 +309,23 @@ class ExplorerHarness:
         rs.w_pop = {int(s): int((rs.wth_p == s).sum()) for s in np.unique(rs.wth_p)}
         log("weather_gauge_built", states=len(rs.w_pop), populations=str(rs.w_pop),
             note="row_local__order_free__target_free")
+
+        # ---- v31 latent FACTORS (target-free, IDEAS_ZOO B2): top PCA factor
+        # scores of the probe matrix -- the exposure substrate for the member
+        # redundancy/crowding report ("different names, same latent bet").
+        rs.factor_scores = None
+        if rs.cfg.REDUNDANCY_REPORT:
+            try:
+                sub_f = rs.Xp[:: max(1, len(rs.Xp) // 20_000)]
+                mu_f = sub_f.mean(axis=0, keepdims=True)
+                _, _, vt_f = np.linalg.svd(sub_f - mu_f, full_matrices=False)
+                comps_f = vt_f[: int(rs.cfg.FACTOR_COUNT)].astype(np.float32)
+                rs.factor_scores = ((rs.Xp - mu_f) @ comps_f.T).astype(np.float32)
+                log("latent_factors_built", n_factors=int(comps_f.shape[0]),
+                    note="target-free PCA factors; exposure substrate for crowding report")
+            except Exception as e:
+                rs.factor_scores = None
+                log("latent_factors_skipped", err=str(e)[:80])
 
         # ---- ADVERSARIAL VALIDATION (v24): early-vs-late covariate-shift map --
         try:
@@ -1158,6 +1193,19 @@ class ExplorerHarness:
                                  "flag": "ALARM" if rs.member_lessons[nm].overfit_ratio > rs.cfg.MAX_OVERFIT_RATIO else "ok"}
                                 for nm in rs.members]), "train_cv_gap.csv")
 
+        # ---- v31 redundancy + factor crowding (IDEAS_ZOO B2, observation) -----
+        try:
+            if rs.cfg.REDUNDANCY_REPORT:
+                rf_df = redundancy_factor_report(rs.members, getattr(rs, "factor_scores", None))
+                if not rf_df.empty:
+                    write_csv(rf_df, "redundancy_factor_report.csv")
+                    log("redundancy_factor", members=len(rf_df),
+                        min_new_info=round(float(rf_df["new_info"].min()), 4),
+                        max_crowding=(round(float(rf_df["crowding_cos"].max()), 4)
+                                      if "crowding_cos" in rf_df.columns else None))
+        except Exception as e:
+            log("redundancy_factor_skipped", err=str(e)[:80])
+
 
     def _forward_holdout(self, rs: "_RunState") -> None:
         # ---- forward-drift check + forward gate (within WORKING region) --------
@@ -1521,7 +1569,7 @@ class ExplorerHarness:
             rs.seed_bank.append(rs.l.key)
             if len(rs.seed_bank) >= rs.cfg.SEEDBANK_SIZE:
                 break
-        rs.cairn = {"version": "v30", "data_source": rs.data_source,
+        rs.cairn = {"version": "v31", "data_source": rs.data_source,
                  "gauge_edges": [float(e) for e in (GAUGE.edges if GAUGE is not None else [])],
                  "terrain_populations": rs.t_pop, "weather_populations": rs.w_pop,
                  "even_dominant": rs.n_even, "trap_count": len(TRAPS),
@@ -1543,7 +1591,7 @@ class ExplorerHarness:
                           key=lambda l: -(l.oof_corr - l.wf_corr))
             rs.decayers = list(dict.fromkeys(f"{l.skill}|{l.family}" for l in rs.decj))[: rs.cfg.LEDGER_MAX_DECAYERS]
             rs.gcount = int((rs.prev_led.get("governor") or {}).get("count", 0)) + 1
-            rs.ledger = {"version": "v30", "data_source": rs.data_source,
+            rs.ledger = {"version": "v31", "data_source": rs.data_source,
                       "governor": {"beta": round(float(GOVERNOR.get("beta", 0.0)), 5),
                                    "lambda": round(float(GOVERNOR.get("lambda", 0.0)), 5),
                                    "width_decay_corr": (round(rs.width_decay_corr, 5)
@@ -1661,7 +1709,7 @@ class ExplorerHarness:
              "No previous cairn was found; ours now stands."),
         ]
         write_chronicle({
-            "title": f"DRW world-explorer v30 ({rs.data_source})",
+            "title": f"DRW world-explorer v31 ({rs.data_source})",
             "features": len(rs.cols), "train_rows": rs.n, "sealed_rows": int(len(rs.sealed_idx)),
             "data_source": rs.data_source, "terrain_pop": rs.t_pop, "weather_pop": rs.w_pop,
             "even_dominant": rs.n_even, "explorer_lines": rs.explorer_lines,

@@ -1459,6 +1459,23 @@ class HarnessConfig:
     WIDTH_BIAS_START: float = 0.8      # initial width share of the search currency (0.5 = off)
     WIDTH_BIAS_HALFLIFE: int = 60      # lessons until the extra width bias halves
 
+    # v31 TEST-LIKENESS sensor (IDEAS_ZOO B1, the user's "strongest sane idea"):
+    # a TARGET-FREE classifier separates working-train rows from TEST rows by X
+    # alone; the robust selector then validates on the most test-like working
+    # rows -- selection worlds shaped like the world being predicted. X only;
+    # labels and leaderboard never touch this (sacred rule).
+    TESTLIKE_REPORT: bool = True       # fit the sensor + write testlike_report.json
+    TESTLIKE_PARTITIONS: bool = True   # add validate-on-most-test-like partitions to the robust court
+    TESTLIKE_COLS: int = 256           # column subsample for the classifier (cost guard)
+    TESTLIKE_ROWS: int = 30_000        # row subsample per side for the fit (cost guard)
+    TESTLIKE_FRACS: tuple[float, ...] = (0.25, 0.40)   # top test-like fractions to validate on
+
+    # v31 REDUNDANCY + FACTOR CROWDING report (IDEAS_ZOO B2, observation only):
+    # per-member new_info = 1 - R^2(member ~ rest of blend) + exposures to the
+    # top target-free PCA factors + max exposure-cosine (latent crowding).
+    REDUNDANCY_REPORT: bool = True
+    FACTOR_COUNT: int = 6              # target-free PCA factors for exposure measurement
+
     # v30.1 WINNER NETWORK (observation only, IDEAS.md 1a): the promoted trails
     # as a graph -- output-corr edges, leader-cluster communities. Feeds the
     # queued network-aware member-selection cap (1b) with measurements first.
@@ -2200,6 +2217,45 @@ class BeaconField:
 
 
 # Global beacon field (set once per run; None when BEACON_DROP is off or no atlas).
+
+TESTLIKE: "np.ndarray | None" = None    # v31: per-working-row test-likeness (target-free sensor)
+
+
+def fit_testlike(X_full: np.ndarray, X_test: np.ndarray, n_work: int,
+                 cfg: HarnessConfig) -> tuple[np.ndarray, dict]:
+    """v31 TEST-LIKENESS sensor (IDEAS_ZOO B1): a target-free HGB classifier
+    separates WORKING-train rows from TEST rows by FEATURES alone; every
+    working row gets the probability it 'looks like test'. X only -- labels
+    and the leaderboard never touch this. Consumed by the robust selector
+    (validate on the most test-like rows) + a drift report. AUC ~0.5 = no
+    detectable covariate shift (the partitions then carry no special info,
+    and the mean-minus-std robust score is unaffected by adding them)."""
+    rng = np.random.default_rng(stable_seed(cfg.SEED, "testlike"))
+    d = X_full.shape[1]
+    cols_idx = np.sort(rng.choice(d, size=min(int(cfg.TESTLIKE_COLS), d), replace=False))
+    rtr = np.arange(n_work)[:: max(1, n_work // int(cfg.TESTLIKE_ROWS))]
+    rte = np.arange(len(X_test))[:: max(1, len(X_test) // int(cfg.TESTLIKE_ROWS))]
+    Xa = np.vstack([X_full[rtr][:, cols_idx], X_test[rte][:, cols_idx]]).astype(np.float32)
+    ya = np.concatenate([np.zeros(len(rtr), np.int32), np.ones(len(rte), np.int32)])
+    clf = HistGradientBoostingClassifier(max_iter=80, max_leaf_nodes=15, learning_rate=0.08,
+                                         random_state=stable_seed(cfg.SEED, "testlike_clf"))
+    ho_m = np.arange(len(ya)) % 3 == 0           # interleaved 1/3 AUC holdout
+    clf.fit(Xa[~ho_m], ya[~ho_m])
+    p_ho = clf.predict_proba(Xa[ho_m])[:, 1]
+    yho = ya[ho_m]
+    order = np.argsort(p_ho, kind="stable")      # honest holdout AUC, rank-based
+    ranks = np.empty(len(p_ho), np.float64)
+    ranks[order] = np.arange(1, len(p_ho) + 1)
+    n1, n0 = int(yho.sum()), int(len(yho) - yho.sum())
+    auc = float((ranks[yho == 1].sum() - n1 * (n1 + 1) / 2.0) / max(1, n1 * n0))
+    scores = np.empty(n_work, np.float32)
+    for i in range(0, n_work, 100_000):
+        j = min(i + 100_000, n_work)
+        scores[i:j] = clf.predict_proba(X_full[i:j][:, cols_idx])[:, 1].astype(np.float32)
+    qs = {f"score_q{int(q * 100)}": round(float(np.quantile(scores, q)), 4)
+          for q in (0.1, 0.5, 0.9)}
+    return scores, {"auc_holdout": round(auc, 4), "cols_used": int(len(cols_idx)),
+                    "rows_fit": int(len(ya)), **qs}
 BEACONS: "BeaconField | None" = None
 
 # (fold_signature, family[, k]) -> ranked feature indices. The signature hashes
@@ -6603,6 +6659,44 @@ def winsorize_audit(blend_oof: np.ndarray, y: np.ndarray, qs: tuple[float, ...])
     return {"raw_corr": raw_c, "best_q": best_q, "best_corr": best_c, "apply": bool(best_q > 0)}
 
 
+
+def redundancy_factor_report(members: dict[str, np.ndarray],
+                             factor_scores: "np.ndarray | None") -> pd.DataFrame:
+    """v31 (IDEAS_ZOO B2): per-member ensemble NEW-INFORMATION + latent-factor
+    crowding, observation only. new_info = 1 - R^2(member ~ rest of the blend
+    pool) -- information the others do not already span (stricter than corr
+    caps). Factor exposures = corr(member oof, target-free PCA factor scores);
+    the max pairwise exposure-cosine surfaces 'different names, same latent
+    bet' -- the crowding channel behind every measured monoculture."""
+    nms = list(members)
+    if len(nms) < 2:
+        return pd.DataFrame()
+    M = np.vstack([np.asarray(members[nm], np.float64) for nm in nms])
+    M = (M - M.mean(axis=1, keepdims=True)) / (M.std(axis=1, keepdims=True) + 1e-12)
+    expo = Ccos = None
+    if factor_scores is not None and factor_scores.shape[0] == M.shape[1]:
+        F = np.asarray(factor_scores, np.float64)
+        Fz = (F - F.mean(0)) / (F.std(0) + 1e-12)
+        expo = (M @ Fz) / M.shape[1]
+        ecos = expo / (np.linalg.norm(expo, axis=1, keepdims=True) + 1e-12)
+        Ccos = ecos @ ecos.T
+        np.fill_diagonal(Ccos, -1.0)
+    rows = []
+    for i, nm in enumerate(nms):
+        others = np.delete(np.arange(len(nms)), i)
+        A = M[others].T
+        beta, *_ = np.linalg.lstsq(A, M[i], rcond=None)
+        r2 = 1.0 - float(np.var(M[i] - A @ beta))
+        r2 = min(1.0, max(0.0, r2))
+        row = {"member": nm, "new_info": round(1.0 - r2, 4), "r2_vs_rest": round(r2, 4)}
+        if expo is not None:
+            for f in range(expo.shape[1]):
+                row[f"factor_{f}"] = round(float(expo[i, f]), 4)
+            j = int(np.argmax(Ccos[i]))
+            row["crowding_partner"] = nms[j]
+            row["crowding_cos"] = round(float(Ccos[i, j]), 4)
+        rows.append(row)
+    return pd.DataFrame(rows).sort_values("new_info")
 # ----------------------------------------------------------------------------
 # 11. Harness orchestration
 # ----------------------------------------------------------------------------
@@ -7073,6 +7167,15 @@ def robust_oos_select(cand_weights, members, member_lessons, spec_lookup,
                 mid = segs[lo:hi]
                 if mid and lo > 0 and hi < nseg:
                     parts.append((f"interior{j}", ~np.isin(segw, mid), np.isin(segw, mid)))
+        if getattr(cfg, "TESTLIKE_PARTITIONS", False) and TESTLIKE is not None:
+            # v31 TEST-LIKENESS partitions (IDEAS_ZOO B1): validate on the working
+            # rows that LOOK most like the test distribution (X-only sensor) --
+            # the court now contains worlds shaped like the world being predicted.
+            tl = TESTLIKE[rows]
+            for j, frac in enumerate(cfg.TESTLIKE_FRACS):
+                thr = np.quantile(tl, 1.0 - float(frac))
+                te_m = tl >= thr
+                parts.append((f"testlike{j}", ~te_m, te_m))
         for t in np.unique(terr):                                     # leave-one-terrain-out
             parts.append((f"terr{int(t)}", terr != t, terr == t))
         for s in np.unique(wth):                                      # leave-one-weather-out
@@ -7741,6 +7844,24 @@ class ExplorerHarness:
         log("probe_ready", probe_rows=len(rs.keep), segments=int(len(np.unique(rs.segp))),
             embargo_rows=rs.embargo_p, splits=rs.cfg.N_SPLITS, wf_folds=rs.cfg.WF_FOLDS)
 
+        # ---- v31 TEST-LIKENESS sensor (IDEAS_ZOO B1): X-only, target-free ------
+        # Working-vs-test classifier on features alone; per-row 'looks like
+        # test' scores feed the robust selector's testlike partitions (flag)
+        # and a drift report. Labels and the leaderboard never touch this.
+        global TESTLIKE
+        TESTLIKE = None
+        if rs.cfg.TESTLIKE_REPORT or rs.cfg.TESTLIKE_PARTITIONS:
+            try:
+                TESTLIKE, rs.testlike_info = fit_testlike(rs.X_full, rs.X_test, rs.n_work, rs.cfg)
+                write_json({**rs.testlike_info,
+                            "note": "target-free working-vs-test classifier; AUC~0.5 = no shift; "
+                                    "feeds robust-selector partitions when TESTLIKE_PARTITIONS"},
+                           "testlike_report.json")
+                log("testlike_sensor", **rs.testlike_info)
+            except Exception as e:
+                TESTLIKE = None
+                log("testlike_skipped", err=str(e)[:80])
+
 
     def _build_atlas(self, rs: "_RunState") -> None:
         global ATLAS, GAUGE
@@ -7767,6 +7888,23 @@ class ExplorerHarness:
         rs.w_pop = {int(s): int((rs.wth_p == s).sum()) for s in np.unique(rs.wth_p)}
         log("weather_gauge_built", states=len(rs.w_pop), populations=str(rs.w_pop),
             note="row_local__order_free__target_free")
+
+        # ---- v31 latent FACTORS (target-free, IDEAS_ZOO B2): top PCA factor
+        # scores of the probe matrix -- the exposure substrate for the member
+        # redundancy/crowding report ("different names, same latent bet").
+        rs.factor_scores = None
+        if rs.cfg.REDUNDANCY_REPORT:
+            try:
+                sub_f = rs.Xp[:: max(1, len(rs.Xp) // 20_000)]
+                mu_f = sub_f.mean(axis=0, keepdims=True)
+                _, _, vt_f = np.linalg.svd(sub_f - mu_f, full_matrices=False)
+                comps_f = vt_f[: int(rs.cfg.FACTOR_COUNT)].astype(np.float32)
+                rs.factor_scores = ((rs.Xp - mu_f) @ comps_f.T).astype(np.float32)
+                log("latent_factors_built", n_factors=int(comps_f.shape[0]),
+                    note="target-free PCA factors; exposure substrate for crowding report")
+            except Exception as e:
+                rs.factor_scores = None
+                log("latent_factors_skipped", err=str(e)[:80])
 
         # ---- ADVERSARIAL VALIDATION (v24): early-vs-late covariate-shift map --
         try:
@@ -8634,6 +8772,19 @@ class ExplorerHarness:
                                  "flag": "ALARM" if rs.member_lessons[nm].overfit_ratio > rs.cfg.MAX_OVERFIT_RATIO else "ok"}
                                 for nm in rs.members]), "train_cv_gap.csv")
 
+        # ---- v31 redundancy + factor crowding (IDEAS_ZOO B2, observation) -----
+        try:
+            if rs.cfg.REDUNDANCY_REPORT:
+                rf_df = redundancy_factor_report(rs.members, getattr(rs, "factor_scores", None))
+                if not rf_df.empty:
+                    write_csv(rf_df, "redundancy_factor_report.csv")
+                    log("redundancy_factor", members=len(rf_df),
+                        min_new_info=round(float(rf_df["new_info"].min()), 4),
+                        max_crowding=(round(float(rf_df["crowding_cos"].max()), 4)
+                                      if "crowding_cos" in rf_df.columns else None))
+        except Exception as e:
+            log("redundancy_factor_skipped", err=str(e)[:80])
+
 
     def _forward_holdout(self, rs: "_RunState") -> None:
         # ---- forward-drift check + forward gate (within WORKING region) --------
@@ -8997,7 +9148,7 @@ class ExplorerHarness:
             rs.seed_bank.append(rs.l.key)
             if len(rs.seed_bank) >= rs.cfg.SEEDBANK_SIZE:
                 break
-        rs.cairn = {"version": "v30", "data_source": rs.data_source,
+        rs.cairn = {"version": "v31", "data_source": rs.data_source,
                  "gauge_edges": [float(e) for e in (GAUGE.edges if GAUGE is not None else [])],
                  "terrain_populations": rs.t_pop, "weather_populations": rs.w_pop,
                  "even_dominant": rs.n_even, "trap_count": len(TRAPS),
@@ -9019,7 +9170,7 @@ class ExplorerHarness:
                           key=lambda l: -(l.oof_corr - l.wf_corr))
             rs.decayers = list(dict.fromkeys(f"{l.skill}|{l.family}" for l in rs.decj))[: rs.cfg.LEDGER_MAX_DECAYERS]
             rs.gcount = int((rs.prev_led.get("governor") or {}).get("count", 0)) + 1
-            rs.ledger = {"version": "v30", "data_source": rs.data_source,
+            rs.ledger = {"version": "v31", "data_source": rs.data_source,
                       "governor": {"beta": round(float(GOVERNOR.get("beta", 0.0)), 5),
                                    "lambda": round(float(GOVERNOR.get("lambda", 0.0)), 5),
                                    "width_decay_corr": (round(rs.width_decay_corr, 5)
@@ -9137,7 +9288,7 @@ class ExplorerHarness:
              "No previous cairn was found; ours now stands."),
         ]
         write_chronicle({
-            "title": f"DRW world-explorer v30 ({rs.data_source})",
+            "title": f"DRW world-explorer v31 ({rs.data_source})",
             "features": len(rs.cols), "train_rows": rs.n, "sealed_rows": int(len(rs.sealed_idx)),
             "data_source": rs.data_source, "terrain_pop": rs.t_pop, "weather_pop": rs.w_pop,
             "even_dominant": rs.n_even, "explorer_lines": rs.explorer_lines,

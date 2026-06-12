@@ -135,3 +135,41 @@ def winsorize_audit(blend_oof: np.ndarray, y: np.ndarray, qs: tuple[float, ...])
     return {"raw_corr": raw_c, "best_q": best_q, "best_corr": best_c, "apply": bool(best_q > 0)}
 
 
+
+def redundancy_factor_report(members: dict[str, np.ndarray],
+                             factor_scores: "np.ndarray | None") -> pd.DataFrame:
+    """v31 (IDEAS_ZOO B2): per-member ensemble NEW-INFORMATION + latent-factor
+    crowding, observation only. new_info = 1 - R^2(member ~ rest of the blend
+    pool) -- information the others do not already span (stricter than corr
+    caps). Factor exposures = corr(member oof, target-free PCA factor scores);
+    the max pairwise exposure-cosine surfaces 'different names, same latent
+    bet' -- the crowding channel behind every measured monoculture."""
+    nms = list(members)
+    if len(nms) < 2:
+        return pd.DataFrame()
+    M = np.vstack([np.asarray(members[nm], np.float64) for nm in nms])
+    M = (M - M.mean(axis=1, keepdims=True)) / (M.std(axis=1, keepdims=True) + 1e-12)
+    expo = Ccos = None
+    if factor_scores is not None and factor_scores.shape[0] == M.shape[1]:
+        F = np.asarray(factor_scores, np.float64)
+        Fz = (F - F.mean(0)) / (F.std(0) + 1e-12)
+        expo = (M @ Fz) / M.shape[1]
+        ecos = expo / (np.linalg.norm(expo, axis=1, keepdims=True) + 1e-12)
+        Ccos = ecos @ ecos.T
+        np.fill_diagonal(Ccos, -1.0)
+    rows = []
+    for i, nm in enumerate(nms):
+        others = np.delete(np.arange(len(nms)), i)
+        A = M[others].T
+        beta, *_ = np.linalg.lstsq(A, M[i], rcond=None)
+        r2 = 1.0 - float(np.var(M[i] - A @ beta))
+        r2 = min(1.0, max(0.0, r2))
+        row = {"member": nm, "new_info": round(1.0 - r2, 4), "r2_vs_rest": round(r2, 4)}
+        if expo is not None:
+            for f in range(expo.shape[1]):
+                row[f"factor_{f}"] = round(float(expo[i, f]), 4)
+            j = int(np.argmax(Ccos[i]))
+            row["crowding_partner"] = nms[j]
+            row["crowding_cos"] = round(float(Ccos[i, j]), 4)
+        rows.append(row)
+    return pd.DataFrame(rows).sort_values("new_info")

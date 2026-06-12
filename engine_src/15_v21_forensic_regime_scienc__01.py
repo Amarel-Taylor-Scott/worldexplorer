@@ -187,6 +187,15 @@ def robust_oos_select(cand_weights, members, member_lessons, spec_lookup,
                 mid = segs[lo:hi]
                 if mid and lo > 0 and hi < nseg:
                     parts.append((f"interior{j}", ~np.isin(segw, mid), np.isin(segw, mid)))
+        if getattr(cfg, "TESTLIKE_PARTITIONS", False) and TESTLIKE is not None:
+            # v31 TEST-LIKENESS partitions (IDEAS_ZOO B1): validate on the working
+            # rows that LOOK most like the test distribution (X-only sensor) --
+            # the court now contains worlds shaped like the world being predicted.
+            tl = TESTLIKE[rows]
+            for j, frac in enumerate(cfg.TESTLIKE_FRACS):
+                thr = np.quantile(tl, 1.0 - float(frac))
+                te_m = tl >= thr
+                parts.append((f"testlike{j}", ~te_m, te_m))
         for t in np.unique(terr):                                     # leave-one-terrain-out
             parts.append((f"terr{int(t)}", terr != t, terr == t))
         for s in np.unique(wth):                                      # leave-one-weather-out

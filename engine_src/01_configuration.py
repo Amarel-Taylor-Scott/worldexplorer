@@ -364,6 +364,23 @@ class HarnessConfig:
     WIDTH_BIAS_START: float = 0.8      # initial width share of the search currency (0.5 = off)
     WIDTH_BIAS_HALFLIFE: int = 60      # lessons until the extra width bias halves
 
+    # v31 TEST-LIKENESS sensor (IDEAS_ZOO B1, the user's "strongest sane idea"):
+    # a TARGET-FREE classifier separates working-train rows from TEST rows by X
+    # alone; the robust selector then validates on the most test-like working
+    # rows -- selection worlds shaped like the world being predicted. X only;
+    # labels and leaderboard never touch this (sacred rule).
+    TESTLIKE_REPORT: bool = True       # fit the sensor + write testlike_report.json
+    TESTLIKE_PARTITIONS: bool = True   # add validate-on-most-test-like partitions to the robust court
+    TESTLIKE_COLS: int = 256           # column subsample for the classifier (cost guard)
+    TESTLIKE_ROWS: int = 30_000        # row subsample per side for the fit (cost guard)
+    TESTLIKE_FRACS: tuple[float, ...] = (0.25, 0.40)   # top test-like fractions to validate on
+
+    # v31 REDUNDANCY + FACTOR CROWDING report (IDEAS_ZOO B2, observation only):
+    # per-member new_info = 1 - R^2(member ~ rest of blend) + exposures to the
+    # top target-free PCA factors + max exposure-cosine (latent crowding).
+    REDUNDANCY_REPORT: bool = True
+    FACTOR_COUNT: int = 6              # target-free PCA factors for exposure measurement
+
     # v30.1 WINNER NETWORK (observation only, IDEAS.md 1a): the promoted trails
     # as a graph -- output-corr edges, leader-cluster communities. Feeds the
     # queued network-aware member-selection cap (1b) with measurements first.

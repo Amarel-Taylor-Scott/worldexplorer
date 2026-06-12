@@ -294,3 +294,42 @@ class BeaconField:
 
 
 # Global beacon field (set once per run; None when BEACON_DROP is off or no atlas).
+
+TESTLIKE: "np.ndarray | None" = None    # v31: per-working-row test-likeness (target-free sensor)
+
+
+def fit_testlike(X_full: np.ndarray, X_test: np.ndarray, n_work: int,
+                 cfg: HarnessConfig) -> tuple[np.ndarray, dict]:
+    """v31 TEST-LIKENESS sensor (IDEAS_ZOO B1): a target-free HGB classifier
+    separates WORKING-train rows from TEST rows by FEATURES alone; every
+    working row gets the probability it 'looks like test'. X only -- labels
+    and the leaderboard never touch this. Consumed by the robust selector
+    (validate on the most test-like rows) + a drift report. AUC ~0.5 = no
+    detectable covariate shift (the partitions then carry no special info,
+    and the mean-minus-std robust score is unaffected by adding them)."""
+    rng = np.random.default_rng(stable_seed(cfg.SEED, "testlike"))
+    d = X_full.shape[1]
+    cols_idx = np.sort(rng.choice(d, size=min(int(cfg.TESTLIKE_COLS), d), replace=False))
+    rtr = np.arange(n_work)[:: max(1, n_work // int(cfg.TESTLIKE_ROWS))]
+    rte = np.arange(len(X_test))[:: max(1, len(X_test) // int(cfg.TESTLIKE_ROWS))]
+    Xa = np.vstack([X_full[rtr][:, cols_idx], X_test[rte][:, cols_idx]]).astype(np.float32)
+    ya = np.concatenate([np.zeros(len(rtr), np.int32), np.ones(len(rte), np.int32)])
+    clf = HistGradientBoostingClassifier(max_iter=80, max_leaf_nodes=15, learning_rate=0.08,
+                                         random_state=stable_seed(cfg.SEED, "testlike_clf"))
+    ho_m = np.arange(len(ya)) % 3 == 0           # interleaved 1/3 AUC holdout
+    clf.fit(Xa[~ho_m], ya[~ho_m])
+    p_ho = clf.predict_proba(Xa[ho_m])[:, 1]
+    yho = ya[ho_m]
+    order = np.argsort(p_ho, kind="stable")      # honest holdout AUC, rank-based
+    ranks = np.empty(len(p_ho), np.float64)
+    ranks[order] = np.arange(1, len(p_ho) + 1)
+    n1, n0 = int(yho.sum()), int(len(yho) - yho.sum())
+    auc = float((ranks[yho == 1].sum() - n1 * (n1 + 1) / 2.0) / max(1, n1 * n0))
+    scores = np.empty(n_work, np.float32)
+    for i in range(0, n_work, 100_000):
+        j = min(i + 100_000, n_work)
+        scores[i:j] = clf.predict_proba(X_full[i:j][:, cols_idx])[:, 1].astype(np.float32)
+    qs = {f"score_q{int(q * 100)}": round(float(np.quantile(scores, q)), 4)
+          for q in (0.1, 0.5, 0.9)}
+    return scores, {"auc_holdout": round(auc, 4), "cols_used": int(len(cols_idx)),
+                    "rows_fit": int(len(ya)), **qs}
