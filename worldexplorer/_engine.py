@@ -1459,6 +1459,14 @@ class HarnessConfig:
     WIDTH_BIAS_START: float = 0.8      # initial width share of the search currency (0.5 = off)
     WIDTH_BIAS_HALFLIFE: int = 60      # lessons until the extra width bias halves
 
+    # v30.1 WINNER NETWORK (observation only, IDEAS.md 1a): the promoted trails
+    # as a graph -- output-corr edges, leader-cluster communities. Feeds the
+    # queued network-aware member-selection cap (1b) with measurements first.
+    NETWORK_REPORT: bool = True        # write winner_network.csv each run
+    NETWORK_MAX_NODES: int = 120       # top promoted lessons (by fitness) in the graph
+    NETWORK_EDGE_CORR: float = 0.5     # |output corr| >= this = an edge
+    NETWORK_COMMUNITY_CORR: float = 0.7  # leader-cluster radius (one prediction community)
+
     # v21 FORENSIC REGIME-SCIENCE layer (self-tuning, forward-validated, no-op-safe).
     # Motivated by the v12 monoculture regression: an 8/8 single-family blend
     # looked great in-regime and decayed out-of-regime, invisible to every
@@ -6155,6 +6163,56 @@ def write_chronicle(parts: dict[str, Any]) -> None:
     log("world_chronicle_written", sections=6)
 
 
+
+def winner_network_report(promoted: list, cfg: HarnessConfig) -> tuple[pd.DataFrame, dict]:
+    """v30.1 WINNER NETWORK (IDEAS.md 1a, observation only): the promoted
+    trails as a GRAPH. Nodes = top promoted lessons; edges = high |output
+    corr| (annotated with input-Jaccard); communities = leader clustering in
+    prediction space. A blend drawn from ONE community is one bet however many
+    viewport families it spans -- the v24 failure mode this measures directly.
+    No rng, no behavior: pure measurement for the queued community cap (1b)."""
+    nodes = sorted((l for l in promoted if np.isfinite(l.oof_corr) and np.std(l.oof) > 1e-9),
+                   key=lesson_fitness, reverse=True)[: int(cfg.NETWORK_MAX_NODES)]
+    if len(nodes) < 2:
+        return pd.DataFrame(), {"nodes": len(nodes), "edges": 0, "communities": len(nodes),
+                                "largest_community_share": 1.0 if nodes else 0.0}
+    step = max(1, len(nodes[0].oof) // 4000)
+    M = np.vstack([np.asarray(l.oof[::step], np.float64) for l in nodes])
+    C = np.abs(np.nan_to_num(np.corrcoef(M), nan=0.0))
+    np.fill_diagonal(C, 0.0)
+    comm = np.full(len(nodes), -1, np.int32)            # leader clustering on corr
+    leaders: list[int] = []
+    for i in range(len(nodes)):
+        for cid, ld in enumerate(leaders):
+            if C[i, ld] >= cfg.NETWORK_COMMUNITY_CORR:
+                comm[i] = cid
+                break
+        if comm[i] < 0:
+            comm[i] = len(leaders)
+            leaders.append(i)
+    cols_sets = [set(l.used_cols) for l in nodes]
+    edge_cnt = 0
+    rows = []
+    for i, l in enumerate(nodes):
+        nbrs = np.where(C[i] >= cfg.NETWORK_EDGE_CORR)[0]
+        edge_cnt += len(nbrs)
+        j_best = int(np.argmax(C[i]))
+        jac = (len(cols_sets[i] & cols_sets[j_best]) / max(1, len(cols_sets[i] | cols_sets[j_best]))
+               if cols_sets[i] else 0.0)
+        rows.append({"key": l.key, "family": l.family, "skill": l.skill,
+                     "transform": l.transform, "k": l.k, "oof_corr": round(l.oof_corr, 5),
+                     "width": round(float(l.width), 5) if np.isfinite(l.width) else None,
+                     "community": int(comm[i]), "degree": int(len(nbrs)),
+                     "max_corr_neighbor": nodes[j_best].key,
+                     "max_corr": round(float(C[i, j_best]), 4),
+                     "max_corr_input_jaccard": round(float(jac), 4),
+                     "mean_abs_corr": round(float(C[i].mean()), 4)})
+    n_comm = len(leaders)
+    biggest = int(np.bincount(comm).max())
+    summary = {"nodes": len(nodes), "edges": int(edge_cnt // 2), "communities": n_comm,
+               "largest_community_share": round(biggest / len(nodes), 4)}
+    return pd.DataFrame(rows).sort_values(["community", "oof_corr"],
+                                          ascending=[True, False]), summary
 # ----------------------------------------------------------------------------
 # 10. Ensemble (pooled + era objectives) + health / dominance / regime stress
 # ----------------------------------------------------------------------------
@@ -8321,6 +8379,18 @@ class ExplorerHarness:
         rs.tg_df = texture_generalization_report(rs.tex_df)
         if not rs.tg_df.empty:
             write_csv(rs.tg_df, "texture_generalization.csv")
+
+        # ---- v30.1 WINNER NETWORK (IDEAS.md 1a): the promoted trails as a graph
+        # -- observation only; communities feed the queued 1b selection cap.
+        try:
+            if rs.cfg.NETWORK_REPORT:
+                rs.net_df, rs.net_summary = winner_network_report(rs.library.promoted(), rs.cfg)
+                if not rs.net_df.empty:
+                    write_csv(rs.net_df, "winner_network.csv")
+                log("winner_network", **rs.net_summary,
+                    note="prediction-space graph of promoted trails; one community = one bet")
+        except Exception as e:
+            log("winner_network_skipped", err=str(e)[:80])
 
         # ---- RED PHEROMONE (v14): the repellent channel, reported ------------
         if RED_MYCELIUM:

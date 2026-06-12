@@ -364,6 +364,14 @@ class HarnessConfig:
     WIDTH_BIAS_START: float = 0.8      # initial width share of the search currency (0.5 = off)
     WIDTH_BIAS_HALFLIFE: int = 60      # lessons until the extra width bias halves
 
+    # v30.1 WINNER NETWORK (observation only, IDEAS.md 1a): the promoted trails
+    # as a graph -- output-corr edges, leader-cluster communities. Feeds the
+    # queued network-aware member-selection cap (1b) with measurements first.
+    NETWORK_REPORT: bool = True        # write winner_network.csv each run
+    NETWORK_MAX_NODES: int = 120       # top promoted lessons (by fitness) in the graph
+    NETWORK_EDGE_CORR: float = 0.5     # |output corr| >= this = an edge
+    NETWORK_COMMUNITY_CORR: float = 0.7  # leader-cluster radius (one prediction community)
+
     # v21 FORENSIC REGIME-SCIENCE layer (self-tuning, forward-validated, no-op-safe).
     # Motivated by the v12 monoculture regression: an 8/8 single-family blend
     # looked great in-regime and decayed out-of-regime, invisible to every

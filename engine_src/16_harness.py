@@ -904,6 +904,18 @@ class ExplorerHarness:
         if not rs.tg_df.empty:
             write_csv(rs.tg_df, "texture_generalization.csv")
 
+        # ---- v30.1 WINNER NETWORK (IDEAS.md 1a): the promoted trails as a graph
+        # -- observation only; communities feed the queued 1b selection cap.
+        try:
+            if rs.cfg.NETWORK_REPORT:
+                rs.net_df, rs.net_summary = winner_network_report(rs.library.promoted(), rs.cfg)
+                if not rs.net_df.empty:
+                    write_csv(rs.net_df, "winner_network.csv")
+                log("winner_network", **rs.net_summary,
+                    note="prediction-space graph of promoted trails; one community = one bet")
+        except Exception as e:
+            log("winner_network_skipped", err=str(e)[:80])
+
         # ---- RED PHEROMONE (v14): the repellent channel, reported ------------
         if RED_MYCELIUM:
             rs.top_red = sorted(RED_MYCELIUM.items(), key=lambda kv: -kv[1])[:40]
