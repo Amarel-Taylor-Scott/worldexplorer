@@ -472,6 +472,30 @@ def _rank_compass(spec: ViewportSpec, X_tr: np.ndarray, y_tr: np.ndarray,
     return [cand[i] for i in np.argsort(consensus)] + [p for p in pool if p not in set(cand)]
 
 
+def _rank_sign_stability(spec: ViewportSpec, X_tr: np.ndarray, y_tr: np.ndarray,
+                         seg_tr: np.ndarray, pool: list[int], sig: tuple) -> list[int]:
+    # v28 SIGN-STABILITY gate (the published 4th-place private-LB recipe): a
+    # feature whose corr-to-y SIGN flips across time segments is regime noise
+    # however large its pooled |corr| -- the cheapest measurable form of "this
+    # alpha does not survive worlds". Stable-sign features rank first (by
+    # pooled |corr|), sign-flippers are demoted to the hard back (demoted by
+    # measurement, never pruned). INPUT-space hardener; adds zero capacity.
+    c_pool = corr_vector(X_tr[:, pool], y_tr)
+    per = []
+    for s in np.unique(seg_tr):
+        m = seg_tr == s
+        if m.sum() >= 50:
+            per.append(corr_vector(X_tr[m][:, pool], y_tr[m]))
+    order = np.argsort(-np.abs(c_pool))
+    if len(per) < 3:
+        return [pool[i] for i in order]
+    P = np.vstack(per)
+    flip = np.mean(np.sign(P) != np.sign(c_pool)[None, :], axis=0)
+    stable = [pool[i] for i in order if flip[i] <= CFG.SIGNSTAB_MAX_FLIP]
+    flippy = [pool[i] for i in order if flip[i] > CFG.SIGNSTAB_MAX_FLIP]
+    return stable + flippy
+
+
 def _rank_decor_family(spec: ViewportSpec, X_tr: np.ndarray, y_tr: np.ndarray,
                        seg_tr: np.ndarray, pool: list[int], sig: tuple) -> list[int]:
     base_key = (sig, "top")
@@ -501,6 +525,7 @@ RANKERS: dict[str, Callable[..., list[int]]] = {
     "invariant": _rank_invariant,
     "stabsel": _rank_stabsel,
     "irm": _rank_irm,
+    "sign_stability": _rank_sign_stability,
     "phyllotaxis": _rank_phyllotaxis,
     "compass": _rank_compass,
     "decor": _rank_decor_family,

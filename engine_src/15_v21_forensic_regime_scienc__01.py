@@ -177,6 +177,16 @@ def robust_oos_select(cand_weights, members, member_lessons, spec_lookup,
             parts.append((f"slide{i}", np.isin(segw, segs[max(0, i - 3):i]), segw == segs[i]))
         for i in range(0, nseg // 2):                                 # REVERSED: train late, test early
             parts.append((f"rev{i}", np.isin(segw, segs[i + 1:]), segw == segs[i]))
+        if getattr(cfg, "ROBUST_INTERIOR", True):
+            # v28 INTERIOR-BLOCK CV (4th-place geometry): train on the OLDEST +
+            # NEWEST segments, validate on the bracketed MIDDLE -- punishes
+            # configs that only fit the recent regime (winning here means the
+            # signal holds across the whole gap the train brackets).
+            for j, (lo, hi) in enumerate(((nseg // 3, (2 * nseg) // 3),
+                                          (nseg // 4, (3 * nseg) // 4))):
+                mid = segs[lo:hi]
+                if mid and lo > 0 and hi < nseg:
+                    parts.append((f"interior{j}", ~np.isin(segw, mid), np.isin(segw, mid)))
         for t in np.unique(terr):                                     # leave-one-terrain-out
             parts.append((f"terr{int(t)}", terr != t, terr == t))
         for s in np.unique(wth):                                      # leave-one-weather-out

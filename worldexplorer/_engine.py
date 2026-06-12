@@ -1435,6 +1435,13 @@ class HarnessConfig:
     CPCV_TEST_GROUPS: int = 2          # test groups per CPCV path
     CPCV_MAX_PATHS: int = 12           # cap on CPCV partitions added to the robust selector
 
+    # v28 PRIVATE-LB-GOLD selection hardeners (from the published 4th-place
+    # recipe; both add ZERO capacity -- one re-RANKS inputs, one adds robust-
+    # selector partitions -- so they cannot feed the measured complexity ratchet).
+    SIGNSTAB_FAMILY: bool = True       # 'sign_stability' ranker family: demote features whose corr-sign flips across segments
+    SIGNSTAB_MAX_FLIP: float = 0.25    # max fraction of segments whose corr sign may disagree with the pooled sign
+    ROBUST_INTERIOR: bool = True       # interior-block partitions (train oldest+newest, validate bracketed middle)
+
     # v21 FORENSIC REGIME-SCIENCE layer (self-tuning, forward-validated, no-op-safe).
     # Motivated by the v12 monoculture regression: an 8/8 single-family blend
     # looked great in-regime and decayed out-of-regime, invisible to every
@@ -1889,7 +1896,10 @@ FAMILIES = ("top", "anon", "market", "decor", "stable", "medoid", "lastN", "dawn
             "terrain", "weather", "mycelium", "shadow", "periphery", "compass",
             "springs", "watershed", "echo", "beacon", "fault", "phyllotaxis", "invariant",
             "head", "mid", "tail",   # v22: positional feature-ORDER blocks (general; feature order is signal)
-            "stabsel", "irm")        # v24: bootstrap-L1 stability selection + invariant-risk (slope) selection
+            "stabsel", "irm") \
+    + (("sign_stability",) if CFG.SIGNSTAB_FAMILY else ())
+# v24: stabsel/irm = bootstrap-L1 stability selection + invariant-risk (slope) selection
+# v28: sign_stability = the 4th-place sign-flip gate as a ranker family (flag-gated)
 ALL_TRANSFORMS = ("identity", "quantize8", "quantize4", "quantize2", "rank", "sign_only",
                   "pca", "pair_aug", "rand_proj", "signed_hadamard", "pca_aug", "foveated",
                   "fold_abs", "fold_pairs", "dual_exposure", "doppler", "lateral_line",
@@ -2637,6 +2647,30 @@ def _rank_compass(spec: ViewportSpec, X_tr: np.ndarray, y_tr: np.ndarray,
     return [cand[i] for i in np.argsort(consensus)] + [p for p in pool if p not in set(cand)]
 
 
+def _rank_sign_stability(spec: ViewportSpec, X_tr: np.ndarray, y_tr: np.ndarray,
+                         seg_tr: np.ndarray, pool: list[int], sig: tuple) -> list[int]:
+    # v28 SIGN-STABILITY gate (the published 4th-place private-LB recipe): a
+    # feature whose corr-to-y SIGN flips across time segments is regime noise
+    # however large its pooled |corr| -- the cheapest measurable form of "this
+    # alpha does not survive worlds". Stable-sign features rank first (by
+    # pooled |corr|), sign-flippers are demoted to the hard back (demoted by
+    # measurement, never pruned). INPUT-space hardener; adds zero capacity.
+    c_pool = corr_vector(X_tr[:, pool], y_tr)
+    per = []
+    for s in np.unique(seg_tr):
+        m = seg_tr == s
+        if m.sum() >= 50:
+            per.append(corr_vector(X_tr[m][:, pool], y_tr[m]))
+    order = np.argsort(-np.abs(c_pool))
+    if len(per) < 3:
+        return [pool[i] for i in order]
+    P = np.vstack(per)
+    flip = np.mean(np.sign(P) != np.sign(c_pool)[None, :], axis=0)
+    stable = [pool[i] for i in order if flip[i] <= CFG.SIGNSTAB_MAX_FLIP]
+    flippy = [pool[i] for i in order if flip[i] > CFG.SIGNSTAB_MAX_FLIP]
+    return stable + flippy
+
+
 def _rank_decor_family(spec: ViewportSpec, X_tr: np.ndarray, y_tr: np.ndarray,
                        seg_tr: np.ndarray, pool: list[int], sig: tuple) -> list[int]:
     base_key = (sig, "top")
@@ -2666,6 +2700,7 @@ RANKERS: dict[str, Callable[..., list[int]]] = {
     "invariant": _rank_invariant,
     "stabsel": _rank_stabsel,
     "irm": _rank_irm,
+    "sign_stability": _rank_sign_stability,
     "phyllotaxis": _rank_phyllotaxis,
     "compass": _rank_compass,
     "decor": _rank_decor_family,
@@ -6874,6 +6909,16 @@ def robust_oos_select(cand_weights, members, member_lessons, spec_lookup,
             parts.append((f"slide{i}", np.isin(segw, segs[max(0, i - 3):i]), segw == segs[i]))
         for i in range(0, nseg // 2):                                 # REVERSED: train late, test early
             parts.append((f"rev{i}", np.isin(segw, segs[i + 1:]), segw == segs[i]))
+        if getattr(cfg, "ROBUST_INTERIOR", True):
+            # v28 INTERIOR-BLOCK CV (4th-place geometry): train on the OLDEST +
+            # NEWEST segments, validate on the bracketed MIDDLE -- punishes
+            # configs that only fit the recent regime (winning here means the
+            # signal holds across the whole gap the train brackets).
+            for j, (lo, hi) in enumerate(((nseg // 3, (2 * nseg) // 3),
+                                          (nseg // 4, (3 * nseg) // 4))):
+                mid = segs[lo:hi]
+                if mid and lo > 0 and hi < nseg:
+                    parts.append((f"interior{j}", ~np.isin(segw, mid), np.isin(segw, mid)))
         for t in np.unique(terr):                                     # leave-one-terrain-out
             parts.append((f"terr{int(t)}", terr != t, terr == t))
         for s in np.unique(wth):                                      # leave-one-weather-out
@@ -8765,7 +8810,7 @@ class ExplorerHarness:
             rs.seed_bank.append(rs.l.key)
             if len(rs.seed_bank) >= rs.cfg.SEEDBANK_SIZE:
                 break
-        rs.cairn = {"version": "v25", "data_source": rs.data_source,
+        rs.cairn = {"version": "v28", "data_source": rs.data_source,
                  "gauge_edges": [float(e) for e in (GAUGE.edges if GAUGE is not None else [])],
                  "terrain_populations": rs.t_pop, "weather_populations": rs.w_pop,
                  "even_dominant": rs.n_even, "trap_count": len(TRAPS),
@@ -8787,7 +8832,7 @@ class ExplorerHarness:
                           key=lambda l: -(l.oof_corr - l.wf_corr))
             rs.decayers = list(dict.fromkeys(f"{l.skill}|{l.family}" for l in rs.decj))[: rs.cfg.LEDGER_MAX_DECAYERS]
             rs.gcount = int((rs.prev_led.get("governor") or {}).get("count", 0)) + 1
-            rs.ledger = {"version": "v27", "data_source": rs.data_source,
+            rs.ledger = {"version": "v28", "data_source": rs.data_source,
                       "governor": {"beta": round(float(GOVERNOR.get("beta", 0.0)), 5),
                                    "lambda": round(float(GOVERNOR.get("lambda", 0.0)), 5),
                                    "count": rs.gcount},
@@ -8902,7 +8947,7 @@ class ExplorerHarness:
              "No previous cairn was found; ours now stands."),
         ]
         write_chronicle({
-            "title": f"DRW world-explorer v25 ({rs.data_source})",
+            "title": f"DRW world-explorer v28 ({rs.data_source})",
             "features": len(rs.cols), "train_rows": rs.n, "sealed_rows": int(len(rs.sealed_idx)),
             "data_source": rs.data_source, "terrain_pop": rs.t_pop, "weather_pop": rs.w_pop,
             "even_dominant": rs.n_even, "explorer_lines": rs.explorer_lines,

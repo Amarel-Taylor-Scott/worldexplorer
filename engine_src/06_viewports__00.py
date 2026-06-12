@@ -15,7 +15,10 @@ FAMILIES = ("top", "anon", "market", "decor", "stable", "medoid", "lastN", "dawn
             "terrain", "weather", "mycelium", "shadow", "periphery", "compass",
             "springs", "watershed", "echo", "beacon", "fault", "phyllotaxis", "invariant",
             "head", "mid", "tail",   # v22: positional feature-ORDER blocks (general; feature order is signal)
-            "stabsel", "irm")        # v24: bootstrap-L1 stability selection + invariant-risk (slope) selection
+            "stabsel", "irm") \
+    + (("sign_stability",) if CFG.SIGNSTAB_FAMILY else ())
+# v24: stabsel/irm = bootstrap-L1 stability selection + invariant-risk (slope) selection
+# v28: sign_stability = the 4th-place sign-flip gate as a ranker family (flag-gated)
 ALL_TRANSFORMS = ("identity", "quantize8", "quantize4", "quantize2", "rank", "sign_only",
                   "pca", "pair_aug", "rand_proj", "signed_hadamard", "pca_aug", "foveated",
                   "fold_abs", "fold_pairs", "dual_exposure", "doppler", "lateral_line",

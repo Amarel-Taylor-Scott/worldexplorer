@@ -340,6 +340,13 @@ class HarnessConfig:
     CPCV_TEST_GROUPS: int = 2          # test groups per CPCV path
     CPCV_MAX_PATHS: int = 12           # cap on CPCV partitions added to the robust selector
 
+    # v28 PRIVATE-LB-GOLD selection hardeners (from the published 4th-place
+    # recipe; both add ZERO capacity -- one re-RANKS inputs, one adds robust-
+    # selector partitions -- so they cannot feed the measured complexity ratchet).
+    SIGNSTAB_FAMILY: bool = True       # 'sign_stability' ranker family: demote features whose corr-sign flips across segments
+    SIGNSTAB_MAX_FLIP: float = 0.25    # max fraction of segments whose corr sign may disagree with the pooled sign
+    ROBUST_INTERIOR: bool = True       # interior-block partitions (train oldest+newest, validate bracketed middle)
+
     # v21 FORENSIC REGIME-SCIENCE layer (self-tuning, forward-validated, no-op-safe).
     # Motivated by the v12 monoculture regression: an 8/8 single-family blend
     # looked great in-regime and decayed out-of-regime, invisible to every
