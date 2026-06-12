@@ -12,6 +12,34 @@ class ExplorerHarness:
 
     def run(self) -> dict[str, Any]:
         rs = _RunState()
+        self._setup(rs)
+        self._load_data(rs)
+        self._quarantine_probe(rs)
+        self._build_atlas(rs)
+        self._beacons(rs)
+        self._pre_scans(rs)
+        self._phase1_explore(rs)
+        self._raid1(rs)
+        self._phase2_evolve(rs)
+        self._raid2(rs)
+        self._ablation_dive(rs)
+        self._trail_reports(rs)
+        self._select_members(rs)
+        self._ensemble(rs)
+        self._forward_holdout(rs)
+        self._governor(rs)
+        self._forensics(rs)
+        self._forward_gate(rs)
+        self._shipping_court(rs)
+        self._shrink_chorus_shape(rs)
+        self._health_alarms(rs)
+        self._sealed_audit(rs)
+        self._final_refit_submit(rs)
+        self._cairn_ledger(rs)
+        self._chronicle(rs)
+        return self._summarize(rs)
+
+    def _setup(self, rs: "_RunState") -> None:
         global ATLAS, GAUGE
         rs.cfg = self.cfg
         MYCELIUM.clear()                 # fresh pheromone network every run
@@ -150,6 +178,8 @@ class ExplorerHarness:
                          "curiosity": 0.0, "caution": 1.0, "sociality": 1.0})
         write_csv(pd.DataFrame(rs.personas), "explorer_personas.csv")
 
+
+    def _load_data(self, rs: "_RunState") -> None:
         # ---- data ----------------------------------------------------------
         rs.root = find_data_root()
         if rs.root is not None:
@@ -213,6 +243,8 @@ class ExplorerHarness:
             log("geometry_randomized",
                 note="non-temporal data: rows permuted so positional CV (segments/WF/sealed) becomes random CV")
 
+
+    def _quarantine_probe(self, rs: "_RunState") -> None:
         # ---- SEALED HOLDOUT quarantine ---------------------------------------
         # The final SEALED_FRACTION of rows is invisible to every decision below.
         rs.seal_cut = int((1 - rs.cfg.SEALED_FRACTION) * rs.n)
@@ -232,6 +264,9 @@ class ExplorerHarness:
         log("probe_ready", probe_rows=len(rs.keep), segments=int(len(np.unique(rs.segp))),
             embargo_rows=rs.embargo_p, splits=rs.cfg.N_SPLITS, wf_folds=rs.cfg.WF_FOLDS)
 
+
+    def _build_atlas(self, rs: "_RunState") -> None:
+        global ATLAS, GAUGE
         # ---- TERRAIN ATLAS: target-free map of the space (working X only) -----
         # y never touches the atlas, so its ids are leak-free everywhere; the
         # 'terrain' family, terrain_router skill, predator terrain attack and
@@ -267,6 +302,8 @@ class ExplorerHarness:
         except Exception as e:
             log("adversarial_validation_skipped", err=str(e)[:80])
 
+
+    def _beacons(self, rs: "_RunState") -> None:
         # ---- BEACON FIELD (v15): drop items at unique typologies -------------
         # Items placed at rare-terrain + novelty-altitude coordinates (all
         # target-free, from the atlas) emit a radial RBF field; the field
@@ -299,6 +336,8 @@ class ExplorerHarness:
         else:
             BEACONS = None
 
+
+    def _pre_scans(self, rs: "_RunState") -> None:
         # ---- SYMMETRY FIELD: even-vs-odd response of the strongest features ---
         rs.sym_df = symmetry_field_report(rs.Xp, rs.yp, rs.cols)
         write_csv(rs.sym_df, "symmetry_field_report.csv")
@@ -353,6 +392,8 @@ class ExplorerHarness:
         gc.collect()
         mem_status("post_atlas")
 
+
+    def _phase1_explore(self, rs: "_RunState") -> None:
         # ---- PHASE 1: developmental explorers (with draft culling) -----------
         rs.library = SharedLibrary()
         rs.gate = DraftGate(rs.cfg)
@@ -700,12 +741,16 @@ class ExplorerHarness:
         gc.collect()
         mem_status("post_phase1")
 
+
+    def _raid1(self, rs: "_RunState") -> None:
         # ---- RAID 1 (v10): the predator strikes early so venom shapes search --
         rs.raid1 = PredatorEngine(rs.cfg, rs.library, rs.spec_lookup, budget=rs.cfg.PREDATOR_BUDGET // 3)
         rs.pred_df1 = rs.raid1.run(rs.Xp, rs.yp, rs.segp, rs.cols, rs.embargo_p)
         rs.attacked = set(rs.pred_df1["key"]) if not rs.pred_df1.empty else set()
         log("raid1_done", attacked=len(rs.attacked), taboo_motifs=len(TABOO))
 
+
+    def _phase2_evolve(self, rs: "_RunState") -> None:
         # ---- PHASE 2: metaheuristic evolution (v12: EPOCHS while fed) ---------
         # v4, v8, v9 AND v11 all ended evolution still climbing at budget
         # exhaustion (v11: g_best in the final generation, budget -1). The
@@ -742,6 +787,8 @@ class ExplorerHarness:
         gc.collect()
         mem_status("post_evolution")
 
+
+    def _raid2(self, rs: "_RunState") -> None:
         # ---- RAID 2: the predator attacks evolution's promotions --------------
         rs.predator = PredatorEngine(rs.cfg, rs.library, rs.spec_lookup,
                                   budget=rs.cfg.PREDATOR_BUDGET - rs.cfg.PREDATOR_BUDGET // 3,
@@ -752,6 +799,8 @@ class ExplorerHarness:
         if not rs.pred_df.empty:
             write_csv(rs.pred_df, "predator_report.csv")
 
+
+    def _ablation_dive(self, rs: "_RunState") -> None:
         # ---- CHAMPION ABLATION (v10): vary one thing at a time ----------------
         rs.ablation_rows = []
         rs.champs = sorted(rs.library.promoted(), key=lesson_fitness, reverse=True)
@@ -838,6 +887,8 @@ class ExplorerHarness:
                 surface_slope=round(rs.slope, 5))
         rs.circadian(rs.phase_frac("dive", 0.80), "post_dive")
 
+
+    def _trail_reports(self, rs: "_RunState") -> None:
         # ---- TOPOGRAPHY: texture every trail, cluster into families -----------
         rs.tex_df, rs.tex_fam = texture_layer(rs.library.lessons, rs.yp, rs.segp, rs.terr_p, rs.wth_p, rs.cfg)
         if not rs.tex_df.empty:
@@ -910,6 +961,8 @@ class ExplorerHarness:
                        .sort_values("best_corr", ascending=False))
                 write_csv(rs.rep, f"study_{rs.dim}_report.csv")
 
+
+    def _select_members(self, rs: "_RunState") -> None:
         # ---- members: regime + uniqueness filters, z-scored --------------------
         rs.promoted = sorted(rs.library.promoted(), key=lambda l: -l.oof_corr)
         if not rs.promoted:
@@ -1044,6 +1097,8 @@ class ExplorerHarness:
             trail_families=rs.n_trail_families, viewport_families=rs.n_view_families,
             dive_members=rs.dive_members)
 
+
+    def _ensemble(self, rs: "_RunState") -> None:
         rs.result = nested_ensemble(rs.members, rs.yp, rs.segp, rs.cfg, rs.embargo_p, wth=rs.wth_p)
         write_json(rs.result["honest"] | {"winner": rs.result["winner"]}, "ensemble_nested_assessment.json")
         log("ensemble_selected", winner=rs.result["winner"],
@@ -1090,6 +1145,8 @@ class ExplorerHarness:
                                  "flag": "ALARM" if rs.member_lessons[nm].overfit_ratio > rs.cfg.MAX_OVERFIT_RATIO else "ok"}
                                 for nm in rs.members]), "train_cv_gap.csv")
 
+
+    def _forward_holdout(self, rs: "_RunState") -> None:
         # ---- forward-drift check + forward gate (within WORKING region) --------
         rs.best_cv_name = max(rs.members, key=lambda nm: pearson(rs.yp, rs.members[nm]))
         rs.names_for_fwd = list(dict.fromkeys(list(rs.w) + [rs.best_cv_name]))
@@ -1119,6 +1176,8 @@ class ExplorerHarness:
         log("forward_holdout", blend=round(rs.forward_blend_corr, 5),
             best_cv_single=rs.best_cv_name, single=round(rs.single_fwd_corr, 5))
 
+
+    def _governor(self, rs: "_RunState") -> None:
         # ---- v27 RUNTIME COMPLEXITY-GENERALIZATION GOVERNOR -------------------
         # Measure whether THIS dataset rewards or punishes capacity -- from every
         # lesson's OWN out-of-period decay (oof_corr - wf_corr) regressed on its
@@ -1174,6 +1233,8 @@ class ExplorerHarness:
                 lessons=len(rs.gov_pts),
                 note="shipping-complexity penalty set by the measured decay~complexity slope (runtime-adaptive)")
 
+
+    def _forensics(self, rs: "_RunState") -> None:
         # ---- v21 FORENSIC REGIME-SCIENCE: self-tuning, forward-validated -------
         # Writes the full forensic suite and MEASURES regime-aware shipping
         # configs on the forward slice. Overrides the incumbent weights ONLY if
@@ -1195,6 +1256,8 @@ class ExplorerHarness:
                 if rs.best_cv_name in rs.fwd_parts else rs.single_fwd_corr
             rs.names_for_fwd = list(dict.fromkeys(list(rs.w) + [rs.best_cv_name]))
 
+
+    def _forward_gate(self, rs: "_RunState") -> None:
         # v18 FORWARD-GATE ERROR BARS: a point margin means a coin-flip can
         # pick the captain. Block-bootstrap the forward slice and require the
         # single to beat the blend SIGNIFICANTLY (in >= GATE_BOOT_CONF of
@@ -1237,6 +1300,8 @@ class ExplorerHarness:
             rs.final_is_median = rs.result["is_median"]
             rs.final_weather = rs.result["weather_states"]
 
+
+    def _shipping_court(self, rs: "_RunState") -> None:
         # ---- v27 ANTI-OVERFIT SHIPPING COURT ---------------------------------
         # Channels the best of the regime-criticality / overfit-gravity-well /
         # CV-reality-distortion / prediction-crowding ideas into ONE cheap, out-of-
@@ -1250,6 +1315,8 @@ class ExplorerHarness:
             rs.final_weights = shipping_court(rs.final_weights, rs.members, rs.member_lessons,
                                            rs.yp, rs.segp, rs.terr_p, rs.wth_p, rs.cfg)
 
+
+    def _shrink_chorus_shape(self, rs: "_RunState") -> None:
         # ---- v16 SHRUNK BLEND (no-op-safe anti-decay) ------------------------
         # The whole story of this dataset is the CV->forward gap (regime decay):
         # honest CV ~0.144 but forward/sealed ~0.108. CV-optimal weights are
@@ -1315,6 +1382,8 @@ class ExplorerHarness:
                 log("prediction_shape_alchemy", shape=rs.ship_shape, forward_after=round(rs.best_sc, 5),
                     note="output remap chosen on the forward slice (no-op unless it helps)")
 
+
+    def _health_alarms(self, rs: "_RunState") -> None:
         rs.monitor = HealthMonitor(rs.cfg)
         if len(rs.members) >= 2:
             # v8: a blend whose every member shares one trail family is one
@@ -1338,6 +1407,8 @@ class ExplorerHarness:
         rs.alarms = rs.monitor.run_checks(rs.result, rs.members, rs.yp, rs.library.lessons, rs.forward_blend_corr)
         write_csv(rs.alarms, "ensemble_health_alarms.csv")
 
+
+    def _sealed_audit(self, rs: "_RunState") -> None:
         # ---- SEALED HOLDOUT: evaluated ONCE, after the blend is frozen ----------
         # Refit shipped members on the working region only; score the sealed tail.
         # This number gates NOTHING in this run -- it is the once-per-version
@@ -1364,6 +1435,8 @@ class ExplorerHarness:
             log("SEALED_HOLDOUT_AUDIT", sealed_corr=round(rs.sealed_corr, 5),
                 rows=len(rs.sealed_idx), note="not_a_gate")
 
+
+    def _final_refit_submit(self, rs: "_RunState") -> None:
         # ---- final refit on FULL train (incl. sealed) + test predictions --------
         gc.collect()
         mem_status("pre_final_refit")
@@ -1395,6 +1468,8 @@ class ExplorerHarness:
         free_gpu_mem()
         mem_status("post_submission")
 
+
+    def _cairn_ledger(self, rs: "_RunState") -> None:
         # ---- CAIRN (v10): fingerprint this world for the next visitor ---------
         rs.champ_key = max(rs.library.promoted(), key=lesson_fitness).key if rs.library.promoted() else None
         # v14 seed bank: the run's best measured LOSERS -- positive-corr trails
@@ -1476,6 +1551,8 @@ class ExplorerHarness:
             except Exception:
                 continue
 
+
+    def _chronicle(self, rs: "_RunState") -> None:
         rs.evo_summary = {}
         rs.full_evo = [h for h in rs.evo.history if np.isfinite(h.get("fitness", float("nan")))]
         if rs.full_evo:
@@ -1561,6 +1638,8 @@ class ExplorerHarness:
                             f"{rs.sealed_corr:+.5f}." if rs.sealed_corr is not None else ""),
         })
 
+
+    def _summarize(self, rs: "_RunState") -> dict[str, Any]:
         rs.summary = {
             "data_source": rs.data_source, "train_rows": rs.n, "working_rows": rs.n_work,
             "sealed_rows": int(len(rs.sealed_idx)), "test_rows": rs.n_test,
