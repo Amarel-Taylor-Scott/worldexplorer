@@ -347,6 +347,13 @@ class HarnessConfig:
     SIGNSTAB_MAX_FLIP: float = 0.25    # max fraction of segments whose corr sign may disagree with the pooled sign
     ROBUST_INTERIOR: bool = True       # interior-block partitions (train oldest+newest, validate bracketed middle)
 
+    # v29 PLS-AS-SELECTOR (kuzn137, private 0.099): rank features by MULTIVARIATE
+    # PLS |coefficient| -- usefulness net of collinear copies -- where corr-ranking
+    # is univariate and double-counts duplicates. Ranking only; zero capacity.
+    PLSRANK_FAMILY: bool = True        # 'pls_weight' ranker family
+    PLSRANK_POOL: int = 192            # pre-screen to top-N by |corr| before the PLS fit (cost guard)
+    PLSRANK_COMPONENTS: int = 8        # PLS components for the selector fit
+
     # v21 FORENSIC REGIME-SCIENCE layer (self-tuning, forward-validated, no-op-safe).
     # Motivated by the v12 monoculture regression: an 8/8 single-family blend
     # looked great in-regime and decayed out-of-regime, invisible to every

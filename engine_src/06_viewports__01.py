@@ -496,6 +496,37 @@ def _rank_sign_stability(spec: ViewportSpec, X_tr: np.ndarray, y_tr: np.ndarray,
     return stable + flippy
 
 
+def _rank_pls_weight(spec: ViewportSpec, X_tr: np.ndarray, y_tr: np.ndarray,
+                     seg_tr: np.ndarray, pool: list[int], sig: tuple) -> list[int]:
+    # v29 PLS-AS-SELECTOR (kuzn137's private-0.099 recipe): rank features by
+    # their |coefficient| in a low-rank Partial-Least-Squares fit -- a
+    # MULTIVARIATE usefulness score (covariance with y NET of what correlated
+    # features already carry). corr-ranking is univariate, so it spends k on
+    # collinear copies of one signal; PLS spreads the viewport across distinct
+    # signal directions. Pre-screened + row-subsampled (cost guard); ranking
+    # only, zero capacity; degrades to corr ranking on any failure.
+    c = np.abs(corr_vector(X_tr[:, pool], y_tr))
+    order0 = np.argsort(-c)
+    ntop = min(CFG.PLSRANK_POOL, len(pool))
+    cand = [pool[i] for i in order0[:ntop]]
+    rest = [pool[i] for i in order0[ntop:]]
+    try:
+        step = max(1, len(X_tr) // 20000)
+        Xc = X_tr[::step][:, cand].astype(np.float64)
+        yc = y_tr[::step].astype(np.float64)
+        Xc = (Xc - Xc.mean(0)) / (Xc.std(0) + 1e-9)
+        yc = yc - yc.mean()
+        nc = int(min(CFG.PLSRANK_COMPONENTS, max(2, len(cand) - 1), max(2, len(Xc) - 1)))
+        mdl = PLSRegression(n_components=nc, scale=False)
+        mdl.fit(Xc, yc)
+        w = np.abs(np.asarray(mdl.coef_).reshape(-1))
+        if len(w) != len(cand):
+            raise ValueError("pls coef shape mismatch")
+        return [cand[i] for i in np.argsort(-w, kind="stable")] + rest
+    except Exception:
+        return [pool[i] for i in order0]
+
+
 def _rank_decor_family(spec: ViewportSpec, X_tr: np.ndarray, y_tr: np.ndarray,
                        seg_tr: np.ndarray, pool: list[int], sig: tuple) -> list[int]:
     base_key = (sig, "top")
@@ -526,6 +557,7 @@ RANKERS: dict[str, Callable[..., list[int]]] = {
     "stabsel": _rank_stabsel,
     "irm": _rank_irm,
     "sign_stability": _rank_sign_stability,
+    "pls_weight": _rank_pls_weight,
     "phyllotaxis": _rank_phyllotaxis,
     "compass": _rank_compass,
     "decor": _rank_decor_family,

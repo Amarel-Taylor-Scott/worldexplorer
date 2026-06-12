@@ -9,7 +9,7 @@ Usage:
   python tools/check_units.py --save  <engine.py> <goldens.json>
   python tools/check_units.py --check <engine.py> <goldens.json>
 """
-import sys, importlib.util, json, hashlib
+import sys, importlib.util, json, hashlib, tempfile
 from pathlib import Path
 
 import numpy as np
@@ -46,10 +46,58 @@ def hash_arr(a) -> str:
     return f"{a.shape}|{hashlib.sha1(a.tobytes()).hexdigest()[:16]}|mean={float(np.nanmean(a)):.6g}"
 
 
+def _mk_lesson(m, name, oof, y, skill, family, transform, k, wf_shift, width, ofr):
+    """A minimal real Lesson for shipping-layer goldens (court/complexity)."""
+    oc = float(m.pearson(y, oof))
+    return m.Lesson("ut", "phase1", skill, f"{family}{k}_{transform}", family, transform,
+                    name, 7, oof.astype(np.float32), [oc], oc, width, 0.0, 0.05,
+                    oc * ofr, ofr, 0.5, 2, "promote", "unit",
+                    wf_corr=oc - wf_shift, k=k)
+
+
+def collect_shipping(m, X, y, seg) -> dict:
+    """Goldens for the SHIPPING layer -- the safety net the future P4
+    consolidation (single shipping authority) will be gated against."""
+    out: dict = {}
+    rng = np.random.default_rng(99)
+    alphas = (0.55, 0.45, 0.40, 0.30, 0.22, 0.15)
+    specs = [("m_ridge", "linear_assoc", "top", "identity", 160, 0.010, 0.06, 1.4),
+             ("m_myc", "gpu_ridge_swarm", "mycelium", "moire", 185, 0.060, 0.07, 2.8),
+             ("m_ols", "linear_ols", "tail", "identity", 50, 0.002, 0.05, 1.1),
+             ("m_steep", "steepness_gate", "mycelium", "quantize2", 170, 0.050, 0.06, 2.5),
+             ("m_pls", "pls", "decor", "identity", 64, 0.008, 0.05, 1.2),
+             ("m_vote", "majority_vote", "anon", "sign_only", 24, 0.001, 0.04, 1.0)]
+    members, lessons = {}, {}
+    for (name, skill, fam, tf, k, wfs, wid, ofr), a in zip(specs, alphas):
+        p = a * y + (1 - a) * rng.normal(size=len(y)).astype(np.float32)
+        p = (p - p.mean()) / (p.std() + 1e-9)
+        members[name] = p.astype(np.float32)
+        lessons[name] = _mk_lesson(m, name, p, y, skill, fam, tf, k, wfs, wid, ofr)
+
+    wth = (np.argsort(np.argsort(np.abs(X[:, 0]))) * 3 // len(X)).astype(np.int32)
+    res = m.nested_ensemble(members, y, seg, m.CFG, 24, wth=wth)
+    out["nested_ensemble"] = {
+        "winner": res["winner"], "is_median": bool(res["is_median"]),
+        "weather": res["weather_states"] is not None,
+        "honest": {kk: round(float(vv), 6) for kk, vv in sorted(res["honest"].items())},
+        "weights": {kk: round(float(vv), 6) for kk, vv in sorted(res["weights"].items())}}
+
+    terr = (np.arange(len(y)) * 4 // len(y)).astype(np.int32)
+    m.GOVERNOR.clear()
+    eq = {nm: 1.0 / len(members) for nm in members}
+    court = m.shipping_court(eq, members, lessons, y, seg, terr, wth, m.CFG)
+    out["shipping_court"] = {kk: round(float(vv), 6) for kk, vv in sorted(court.items())}
+
+    out["member_complexity"] = {nm: round(float(m.member_complexity(lessons[nm], m.CFG)), 6)
+                                for nm in sorted(lessons)}
+    return out
+
+
 def collect(m) -> dict:
     X, y, seg, cols = fixture(m)
     c = m.CFG
     c.SEED = 42
+    m.OUT = Path(tempfile.mkdtemp(prefix="units_"))   # court/report writes go to a scratch dir
     c.MLP_MAX_ITER = 2; c.MLP_MAX_ROWS = 2000; c.STABSEL_BOOT = 5
     c.GBDT_ESTIMATORS = min(getattr(c, "GBDT_ESTIMATORS", 60), 60)
     # fit the target-free organs so terrain/weather/pressure/invariant/irm/
@@ -84,6 +132,7 @@ def collect(m) -> dict:
         idx, tfn = m.build_viewport(spec, X, y, seg, cols, np.random.default_rng(11))
         Zh = tfn(X[hold][:, idx])
         out["transforms"][tf] = {"idx": list(map(int, idx)), "Z": hash_arr(Zh)}
+    out["shipping"] = collect_shipping(m, X, y, seg)
     return out
 
 
@@ -98,7 +147,7 @@ def main() -> int:
         return 0
     ref = json.loads(base.read_text())
     bad = []
-    for sect in ("skills", "rankers", "transforms"):
+    for sect in ("skills", "rankers", "transforms", "shipping"):
         for key in sorted(set(got[sect]) | set(ref.get(sect, {}))):
             if got[sect].get(key) != ref.get(sect, {}).get(key):
                 bad.append(f"{sect}.{key}: {got[sect].get(key)!r} != {ref.get(sect, {}).get(key)!r}")
