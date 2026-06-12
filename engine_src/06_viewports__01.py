@@ -113,6 +113,400 @@ def _rank_medoid(X_tr: np.ndarray, y_tr: np.ndarray, pool: list[int], threshold:
     return [cand[p] for p in medoid_pos]
 
 
+# ---------------------------------------------------------------------------
+# RANKERS registry: family -> _rank_<family>(spec, X_tr, y_tr, seg_tr, pool,
+# sig) -> ranked pool indices. Families with no entry corr-rank (the default).
+# Adding a family = one function + one registry row (+ FAMILIES tuple entry).
+# ---------------------------------------------------------------------------
+
+def _rank_by_corr(spec: ViewportSpec, X_tr: np.ndarray, y_tr: np.ndarray,
+                  seg_tr: np.ndarray, pool: list[int], sig: tuple) -> list[int]:
+    c = np.abs(corr_vector(X_tr[:, pool], y_tr))
+    return [pool[i] for i in np.argsort(-c)]
+
+
+def _rank_stable_family(spec: ViewportSpec, X_tr: np.ndarray, y_tr: np.ndarray,
+                        seg_tr: np.ndarray, pool: list[int], sig: tuple) -> list[int]:
+    return _rank_stable(X_tr, y_tr, seg_tr, pool)
+
+
+def _rank_medoid_family(spec: ViewportSpec, X_tr: np.ndarray, y_tr: np.ndarray,
+                        seg_tr: np.ndarray, pool: list[int], sig: tuple) -> list[int]:
+    return _rank_medoid(X_tr, y_tr, pool, CFG.MEDOID_THRESHOLD)
+
+
+def _rank_clocks_family(spec: ViewportSpec, X_tr: np.ndarray, y_tr: np.ndarray,
+                        seg_tr: np.ndarray, pool: list[int], sig: tuple) -> list[int]:
+    return _rank_two_clocks(X_tr, y_tr, pool, rising_only=(spec.family == "dawn"))
+
+
+def _rank_terrain(spec: ViewportSpec, X_tr: np.ndarray, y_tr: np.ndarray,
+                  seg_tr: np.ndarray, pool: list[int], sig: tuple) -> list[int]:
+    if ATLAS is not None:
+        return ATLAS.f_rank(X_tr, pool)     # fully target-free ranking
+    c = np.abs(corr_vector(X_tr[:, pool], y_tr))
+    return [pool[i] for i in np.argsort(-c)]
+
+
+def _rank_weather(spec: ViewportSpec, X_tr: np.ndarray, y_tr: np.ndarray,
+                  seg_tr: np.ndarray, pool: list[int], sig: tuple) -> list[int]:
+    # robust intersection across weather bands: rank by the WEAKEST
+    # per-state |corr| -- alpha that survives storms (v9)
+    if GAUGE is not None:
+        wth = GAUGE.assign(X_tr)
+        worst = np.full(len(pool), np.inf, np.float64)
+        seen = 0
+        for s in np.unique(wth):
+            msk = wth == s
+            if msk.sum() < 300:
+                continue
+            worst = np.minimum(worst, np.abs(corr_vector(X_tr[msk][:, pool], y_tr[msk])))
+            seen += 1
+        if seen >= 2:
+            return [pool[i] for i in np.argsort(-worst)]
+        c = np.abs(corr_vector(X_tr[:, pool], y_tr))
+        return [pool[i] for i in np.argsort(-c)]
+    c = np.abs(corr_vector(X_tr[:, pool], y_tr))
+    return [pool[i] for i in np.argsort(-c)]
+
+
+def _rank_pressure(spec: ViewportSpec, X_tr: np.ndarray, y_tr: np.ndarray,
+                   seg_tr: np.ndarray, pool: list[int], sig: tuple) -> list[int]:
+    # v20 MICROSTRUCTURE: the order-book twin of 'weather' -- rank features
+    # by their WEAKEST |corr| across order-book pressure states (alpha that
+    # survives both slack and stressed books). Same robust-intersection
+    # idea, on flow/depth pressure instead of generic dispersion.
+    if PRESSURE is not None:
+        prs = PRESSURE.assign(X_tr)
+        worst = np.full(len(pool), np.inf, np.float64)
+        seen = 0
+        for s in np.unique(prs):
+            msk = prs == s
+            if msk.sum() < 300:
+                continue
+            worst = np.minimum(worst, np.abs(corr_vector(X_tr[msk][:, pool], y_tr[msk])))
+            seen += 1
+        return ([pool[i] for i in np.argsort(-worst)] if seen >= 2
+                else [pool[i] for i in np.argsort(-np.abs(corr_vector(X_tr[:, pool], y_tr)))])
+    c = np.abs(corr_vector(X_tr[:, pool], y_tr))
+    return [pool[i] for i in np.argsort(-c)]
+
+
+def _rank_mycelium(spec: ViewportSpec, X_tr: np.ndarray, y_tr: np.ndarray,
+                   seg_tr: np.ndarray, pool: list[int], sig: tuple) -> list[int]:
+    # stigmergy: follow the pheromone other explorers' PROMOTED lessons
+    # deposited on these columns; |corr| as scent while the net is young
+    c = np.abs(corr_vector(X_tr[:, pool], y_tr))
+    if MYCELIUM:
+        scent = np.array([MYCELIUM.get(int(i), 0.0) for i in pool], np.float64)
+        if CFG.MYCELIUM_SATURATE:
+            # v23: sqrt-saturate the pheromone (sublinear -- a rich column
+            # cannot run away) and let |corr| genuinely co-rank, both
+            # normalized to [0,1]. Breaks the v12/v19 monoculture feedback
+            # loop (scent -> reuse -> more scent) while keeping mycelium a
+            # useful family. corr alone still leads when the net is young.
+            s_n = np.sqrt(np.maximum(scent, 0.0))
+            s_n = s_n / (s_n.max() + 1e-12)
+            c_n = c / (c.max() + 1e-12)
+            score = 0.65 * s_n + 0.35 * c_n
+        else:
+            score = scent + 0.01 * c              # legacy: corr only breaks ties
+    else:
+        score = c
+    return [pool[i] for i in np.argsort(-score)]
+
+
+def _rank_shadow(spec: ViewportSpec, X_tr: np.ndarray, y_tr: np.ndarray,
+                 seg_tr: np.ndarray, pool: list[int], sig: tuple) -> list[int]:
+    # negative space: HIGH variance, LOW |corr| -- the big quiet regions
+    c = np.abs(corr_vector(X_tr[:, pool], y_tr))
+    v = X_tr[:: max(1, len(X_tr) // 20_000)][:, pool].var(axis=0)
+    loud = v >= np.quantile(v, CFG.SHADOW_VAR_Q)
+    quiet = np.where(loud, -c, -np.inf)           # among loud, quietest first
+    return [pool[i] for i in np.argsort(-quiet)]
+
+
+def _rank_periphery(spec: ViewportSpec, X_tr: np.ndarray, y_tr: np.ndarray,
+                    seg_tr: np.ndarray, pool: list[int], sig: tuple) -> list[int]:
+    # v10: motion in the corner of the eye -- |corr| shift between the
+    # early 75% and late 25% of the fold, discounted where the mycelium
+    # is already thick (everyone is fixating there anyway)
+    cut = max(100, int(0.75 * len(y_tr)))
+    c_early = np.abs(corr_vector(X_tr[:cut][:, pool], y_tr[:cut]))
+    c_late = (np.abs(corr_vector(X_tr[cut:][:, pool], y_tr[cut:]))
+              if len(y_tr) - cut >= 100 else c_early)
+    shift = np.abs(c_late - c_early)
+    pher = np.array([MYCELIUM.get(int(i), 0.0) for i in pool], np.float64)
+    return [pool[i] for i in np.argsort(-(shift / (1.0 + 10.0 * pher)))]
+
+
+def _rank_springs(spec: ViewportSpec, X_tr: np.ndarray, y_tr: np.ndarray,
+                  seg_tr: np.ndarray, pool: list[int], sig: tuple) -> list[int]:
+    # v13 persistence wells: slow geology, not fast weather -- rank by
+    # lag-1 self-autocorrelation x |corr| (a spring that flows today
+    # flowed yesterday too); both measured on the training fold only
+    c = np.abs(corr_vector(X_tr[:, pool], y_tr))
+    sub = X_tr[:: max(1, len(X_tr) // 20_000)][:, pool]
+    if len(sub) >= 200:
+        a, b = sub[:-1], sub[1:]
+        az = (a - a.mean(0)) / (a.std(0) + 1e-9)
+        bz = (b - b.mean(0)) / (b.std(0) + 1e-9)
+        ac1 = np.clip((az * bz).mean(0), 0.0, None)
+        return [pool[i] for i in np.argsort(-(ac1 * c))]
+    return [pool[i] for i in np.argsort(-c)]
+
+
+def _rank_watershed(spec: ViewportSpec, X_tr: np.ndarray, y_tr: np.ndarray,
+                    seg_tr: np.ndarray, pool: list[int], sig: tuple) -> list[int]:
+    # v13 valley specialists: how much the BEST single-terrain |corr|
+    # exceeds the pooled |corr| -- the expert of ONE valley (the exact
+    # complement of 'weather', which demands all-band robustness)
+    c = np.abs(corr_vector(X_tr[:, pool], y_tr))
+    if ATLAS is not None:
+        t_ids = ATLAS.assign(X_tr)
+        best_t = np.zeros(len(pool), np.float64)
+        seen_t = 0
+        for t in np.unique(t_ids):
+            m = t_ids == t
+            if m.sum() < 300:
+                continue
+            best_t = np.maximum(best_t, np.abs(corr_vector(X_tr[m][:, pool], y_tr[m])))
+            seen_t += 1
+        return ([pool[i] for i in np.argsort(-(best_t - c))] if seen_t >= 2
+                else [pool[i] for i in np.argsort(-c)])
+    return [pool[i] for i in np.argsort(-c)]
+
+
+def _rank_echo(spec: ViewportSpec, X_tr: np.ndarray, y_tr: np.ndarray,
+               seg_tr: np.ndarray, pool: list[int], sig: tuple) -> list[int]:
+    # v13: columns still ringing with YESTERDAY'S outcome -- ranked by
+    # |corr(x_t, y_{t-1})| on the training fold. The model still maps
+    # x -> y; only the RANKING listens backward (no test-time y needed).
+    if len(y_tr) > 300:
+        c = np.abs(corr_vector(X_tr[1:][:, pool], y_tr[:-1]))
+    else:
+        c = np.abs(corr_vector(X_tr[:, pool], y_tr))
+    return [pool[i] for i in np.argsort(-c)]
+
+
+def _rank_fault(spec: ViewportSpec, X_tr: np.ndarray, y_tr: np.ndarray,
+                seg_tr: np.ndarray, pool: list[int], sig: tuple) -> list[int]:
+    # v16 CRACKS: rank features by the largest DISCONTINUITY in their
+    # per-segment corr between ADJACENT time segments -- where the
+    # feature's relationship to y FRACTURES at a regime boundary. The
+    # complement of 'stable'/'springs': fault surfaces the breaks so a
+    # regime-aware skill (recency, caravan, weather) can model them.
+    segs = np.unique(seg_tr)
+    if len(segs) >= 3:
+        per = []
+        for s in segs:
+            m = seg_tr == s
+            per.append(corr_vector(X_tr[m][:, pool], y_tr[m]) if m.sum() >= 50
+                       else np.zeros(len(pool)))
+        P = np.vstack(per)
+        frac = np.abs(np.diff(P, axis=0)).max(axis=0)     # biggest adjacent jump
+        return [pool[i] for i in np.argsort(-frac)]
+    c = np.abs(corr_vector(X_tr[:, pool], y_tr))
+    return [pool[i] for i in np.argsort(-c)]
+
+
+def _rank_invariant(spec: ViewportSpec, X_tr: np.ndarray, y_tr: np.ndarray,
+                    seg_tr: np.ndarray, pool: list[int], sig: tuple) -> list[int]:
+    # v19 INVARIANT FEATURE COURT (causal robustness): not "which features
+    # correlate most" but "which keep their relationship to y across MANY
+    # ENVIRONMENTS" -- time segments AND target-free terrain/weather states.
+    # score = mean|corr| - lambda * std(corr across worlds). Distinct from
+    # 'stable' (temporal only): invariance survives environment partitions,
+    # the features least likely to break under regime shift.
+    worlds = []
+    for s in np.unique(seg_tr):
+        m = seg_tr == s
+        if m.sum() >= 80:
+            worlds.append(corr_vector(X_tr[m][:, pool], y_tr[m]))
+    for organ in (ATLAS, GAUGE):
+        if organ is not None:
+            try:
+                ids = organ.assign(X_tr)
+                for s in np.unique(ids):
+                    m = ids == s
+                    if m.sum() >= 80:
+                        worlds.append(corr_vector(X_tr[m][:, pool], y_tr[m]))
+            except Exception:
+                pass
+    if len(worlds) >= 3:
+        W = np.vstack(worlds)
+        score = np.abs(W.mean(axis=0)) - np.std(W, axis=0)   # mean signal minus cross-world instability
+        return [pool[i] for i in np.argsort(-score)]
+    c = np.abs(corr_vector(X_tr[:, pool], y_tr))
+    return [pool[i] for i in np.argsort(-c)]
+
+
+def _rank_stabsel(spec: ViewportSpec, X_tr: np.ndarray, y_tr: np.ndarray,
+                  seg_tr: np.ndarray, pool: list[int], sig: tuple) -> list[int]:
+    # v24 STABILITY SELECTION (Meinshausen-Buhlmann): rank features by how
+    # OFTEN they survive an L1 (Lasso) fit across bootstrap subsamples of
+    # the training fold -- finite-sample false-discovery control, the
+    # principled "which of 800 features are real". Pre-screen to the top
+    # STABSEL_POOL by |corr| (fold-honest), stabilize among those, append
+    # the rest. Cached per (fold, family) so it is paid once, not per lesson.
+    c = np.abs(corr_vector(X_tr[:, pool], y_tr))
+    order0 = np.argsort(-c)
+    ntop = min(CFG.STABSEL_POOL, len(pool))
+    cand = [pool[i] for i in order0[:ntop]]
+    rest = [pool[i] for i in order0[ntop:]]
+    try:
+        step = max(1, len(X_tr) // 20000)
+        Xc = X_tr[::step][:, cand].astype(np.float64)
+        yc = y_tr[::step].astype(np.float64)
+        Xc = (Xc - Xc.mean(0)) / (Xc.std(0) + 1e-9)
+        yc = yc - yc.mean()
+        freq = np.zeros(len(cand), np.float64)
+        rng_s = np.random.default_rng(stable_seed(CFG.SEED, "stabsel", len(cand), len(Xc)))
+        nB = max(2, int(CFG.STABSEL_BOOT))
+        half = max(2, len(cand) // 2)
+        for _ in range(nB):
+            bi = rng_s.integers(0, len(Xc), len(Xc))
+            jc = rng_s.choice(len(cand), size=half, replace=False)
+            try:
+                m = Lasso(alpha=CFG.STABSEL_ALPHA, max_iter=300)
+                m.fit(Xc[bi][:, jc], yc[bi])
+                freq[jc[np.abs(m.coef_) > 1e-8]] += 1.0
+            except Exception:
+                pass
+        freq /= nB
+        return [cand[i] for i in np.argsort(-freq, kind="stable")] + rest
+    except Exception:
+        return [pool[i] for i in order0]
+
+
+def _rank_irm(spec: ViewportSpec, X_tr: np.ndarray, y_tr: np.ndarray,
+              seg_tr: np.ndarray, pool: list[int], sig: tuple) -> list[int]:
+    # v24 INVARIANT-RISK (IRM-flavoured) feature selection: keep features
+    # whose univariate SLOPE to y is INVARIANT across ENVIRONMENTS (time
+    # segments + target-free terrain/weather states). score = |mean_e b_e|
+    # - std_e(b_e) - penalty*signflip*|mean_e b_e|. The slope twin of
+    # 'invariant' (which uses |corr|), explicitly punishing sign flips --
+    # the causally-stable signal least likely to break under regime shift.
+    envs = []
+    for s in np.unique(seg_tr):
+        m = seg_tr == s
+        if m.sum() >= 80:
+            envs.append(m)
+    for organ in (ATLAS, GAUGE):
+        if organ is not None:
+            try:
+                ids = organ.assign(X_tr)
+                for s in np.unique(ids):
+                    m = ids == s
+                    if m.sum() >= 80:
+                        envs.append(m)
+            except Exception:
+                pass
+    if len(envs) >= 3:
+        slopes = []
+        for m in envs:
+            Xe = X_tr[m][:, pool].astype(np.float64)
+            ye = y_tr[m].astype(np.float64)
+            Xz = (Xe - Xe.mean(0)) / (Xe.std(0) + 1e-9)
+            slopes.append((Xz * (ye - ye.mean())[:, None]).mean(0))   # univariate slope/feature
+        S = np.vstack(slopes)
+        mean_b = np.abs(S.mean(axis=0))
+        std_b = S.std(axis=0)
+        flip = np.mean(np.sign(S) != np.sign(S.mean(axis=0))[None, :], axis=0)
+        score = mean_b - std_b - CFG.IRM_SIGNFLIP_PENALTY * flip * mean_b
+        return [pool[i] for i in np.argsort(-score)]
+    c = np.abs(corr_vector(X_tr[:, pool], y_tr))
+    return [pool[i] for i in np.argsort(-c)]
+
+
+def _rank_phyllotaxis(spec: ViewportSpec, X_tr: np.ndarray, y_tr: np.ndarray,
+                      seg_tr: np.ndarray, pool: list[int], sig: tuple) -> list[int]:
+    # v16 SPIRALS: sunflower-seed packing maximizes coverage. Order
+    # features by |corr|, then SELECT by a golden-ratio low-discrepancy
+    # stride so the chosen viewport spreads across the corr spectrum
+    # (strong + medium together) -- deterministic decorrelation by optimal
+    # spacing, the phyllotaxis dual of greedy 'decor'.
+    c = np.abs(corr_vector(X_tr[:, pool], y_tr))
+    by_corr = [pool[i] for i in np.argsort(-c)]
+    nN = len(by_corr)
+    phi = 0.6180339887498949
+    order, seen = [], set()
+    for i in range(nN):
+        p = int((i * phi % 1.0) * nN)
+        while p in seen:
+            p = (p + 1) % nN
+        seen.add(p)
+        order.append(by_corr[p])
+    return order
+
+
+def _rank_compass(spec: ViewportSpec, X_tr: np.ndarray, y_tr: np.ndarray,
+                  seg_tr: np.ndarray, pool: list[int], sig: tuple) -> list[int]:
+    # v11 bird multi-sensor navigation: rank by AGREEMENT across three
+    # target-free frames -- magnetic (terrain separation), sun (time
+    # stability across segments), star (weather-band robustness). The
+    # features all compasses point at are true north. Restricted to the
+    # strongest |corr| candidates so the three rank-agreements are cheap.
+    c = np.abs(corr_vector(X_tr[:, pool], y_tr))
+    cand = [pool[i] for i in np.argsort(-c)[: min(CFG.COMPASS_POOL, len(pool))]]
+    ranks = []
+    # sun compass: stability across time segments (mean - std of per-seg corr)
+    ranks.append(_compass_rankvec(_rank_stable(X_tr, y_tr, seg_tr, cand), cand))
+    # magnetic compass: separation between terrains (atlas f_rank), target-free
+    if ATLAS is not None:
+        ranks.append(_compass_rankvec(ATLAS.f_rank(X_tr, cand), cand))
+    # star compass: weakest-weather-band robustness, target-free bands
+    if GAUGE is not None:
+        wth = GAUGE.assign(X_tr)
+        worst = np.full(len(cand), np.inf, np.float64)
+        seen = 0
+        for s in np.unique(wth):
+            m = wth == s
+            if m.sum() < 300:
+                continue
+            worst = np.minimum(worst, np.abs(corr_vector(X_tr[m][:, cand], y_tr[m])))
+            seen += 1
+        if seen >= 2:
+            ranks.append(_compass_rankvec([cand[i] for i in np.argsort(-worst)], cand))
+    consensus = np.mean(np.vstack(ranks), axis=0) if ranks else c[np.argsort(-c)][: len(cand)]
+    return [cand[i] for i in np.argsort(consensus)] + [p for p in pool if p not in set(cand)]
+
+
+def _rank_decor_family(spec: ViewportSpec, X_tr: np.ndarray, y_tr: np.ndarray,
+                       seg_tr: np.ndarray, pool: list[int], sig: tuple) -> list[int]:
+    base_key = (sig, "top")
+    base = _RANK_CACHE.get(base_key)
+    if base is None:
+        c = np.abs(corr_vector(X_tr[:, pool], y_tr))
+        base = [pool[i] for i in np.argsort(-c)]
+        _RANK_CACHE[base_key] = base
+    return _rank_decor(X_tr, base, spec.k)
+
+
+RANKERS: dict[str, Callable[..., list[int]]] = {
+    "stable": _rank_stable_family,
+    "medoid": _rank_medoid_family,
+    "dawn": _rank_clocks_family,
+    "both_clocks": _rank_clocks_family,
+    "terrain": _rank_terrain,
+    "weather": _rank_weather,
+    "pressure": _rank_pressure,
+    "mycelium": _rank_mycelium,
+    "shadow": _rank_shadow,
+    "periphery": _rank_periphery,
+    "springs": _rank_springs,
+    "watershed": _rank_watershed,
+    "echo": _rank_echo,
+    "fault": _rank_fault,
+    "invariant": _rank_invariant,
+    "stabsel": _rank_stabsel,
+    "irm": _rank_irm,
+    "phyllotaxis": _rank_phyllotaxis,
+    "compass": _rank_compass,
+    "decor": _rank_decor_family,
+}
+
+
 def _ranked_for(spec: ViewportSpec, X_tr: np.ndarray, y_tr: np.ndarray, seg_tr: np.ndarray,
                 cols: list[str]) -> list[int]:
     sig = _fold_sig(X_tr, y_tr)
@@ -121,319 +515,7 @@ def _ranked_for(spec: ViewportSpec, X_tr: np.ndarray, y_tr: np.ndarray, seg_tr: 
     if hit is not None:
         return hit
     pool = _family_pool(spec.family, cols)
-    if spec.family == "stable":
-        ranked = _rank_stable(X_tr, y_tr, seg_tr, pool)
-    elif spec.family == "medoid":
-        ranked = _rank_medoid(X_tr, y_tr, pool, CFG.MEDOID_THRESHOLD)
-    elif spec.family in ("dawn", "both_clocks"):
-        ranked = _rank_two_clocks(X_tr, y_tr, pool, rising_only=(spec.family == "dawn"))
-    elif spec.family == "terrain":
-        if ATLAS is not None:
-            ranked = ATLAS.f_rank(X_tr, pool)     # fully target-free ranking
-        else:
-            c = np.abs(corr_vector(X_tr[:, pool], y_tr))
-            ranked = [pool[i] for i in np.argsort(-c)]
-    elif spec.family == "weather":
-        # robust intersection across weather bands: rank by the WEAKEST
-        # per-state |corr| -- alpha that survives storms (v9)
-        if GAUGE is not None:
-            wth = GAUGE.assign(X_tr)
-            worst = np.full(len(pool), np.inf, np.float64)
-            seen = 0
-            for s in np.unique(wth):
-                msk = wth == s
-                if msk.sum() < 300:
-                    continue
-                worst = np.minimum(worst, np.abs(corr_vector(X_tr[msk][:, pool], y_tr[msk])))
-                seen += 1
-            if seen >= 2:
-                ranked = [pool[i] for i in np.argsort(-worst)]
-            else:
-                c = np.abs(corr_vector(X_tr[:, pool], y_tr))
-                ranked = [pool[i] for i in np.argsort(-c)]
-        else:
-            c = np.abs(corr_vector(X_tr[:, pool], y_tr))
-            ranked = [pool[i] for i in np.argsort(-c)]
-    elif spec.family == "pressure":
-        # v20 MICROSTRUCTURE: the order-book twin of 'weather' -- rank features
-        # by their WEAKEST |corr| across order-book pressure states (alpha that
-        # survives both slack and stressed books). Same robust-intersection
-        # idea, on flow/depth pressure instead of generic dispersion.
-        if PRESSURE is not None:
-            prs = PRESSURE.assign(X_tr)
-            worst = np.full(len(pool), np.inf, np.float64)
-            seen = 0
-            for s in np.unique(prs):
-                msk = prs == s
-                if msk.sum() < 300:
-                    continue
-                worst = np.minimum(worst, np.abs(corr_vector(X_tr[msk][:, pool], y_tr[msk])))
-                seen += 1
-            ranked = ([pool[i] for i in np.argsort(-worst)] if seen >= 2
-                      else [pool[i] for i in np.argsort(-np.abs(corr_vector(X_tr[:, pool], y_tr)))])
-        else:
-            c = np.abs(corr_vector(X_tr[:, pool], y_tr))
-            ranked = [pool[i] for i in np.argsort(-c)]
-    elif spec.family == "mycelium":
-        # stigmergy: follow the pheromone other explorers' PROMOTED lessons
-        # deposited on these columns; |corr| as scent while the net is young
-        c = np.abs(corr_vector(X_tr[:, pool], y_tr))
-        if MYCELIUM:
-            scent = np.array([MYCELIUM.get(int(i), 0.0) for i in pool], np.float64)
-            if CFG.MYCELIUM_SATURATE:
-                # v23: sqrt-saturate the pheromone (sublinear -- a rich column
-                # cannot run away) and let |corr| genuinely co-rank, both
-                # normalized to [0,1]. Breaks the v12/v19 monoculture feedback
-                # loop (scent -> reuse -> more scent) while keeping mycelium a
-                # useful family. corr alone still leads when the net is young.
-                s_n = np.sqrt(np.maximum(scent, 0.0))
-                s_n = s_n / (s_n.max() + 1e-12)
-                c_n = c / (c.max() + 1e-12)
-                score = 0.65 * s_n + 0.35 * c_n
-            else:
-                score = scent + 0.01 * c              # legacy: corr only breaks ties
-        else:
-            score = c
-        ranked = [pool[i] for i in np.argsort(-score)]
-    elif spec.family == "shadow":
-        # negative space: HIGH variance, LOW |corr| -- the big quiet regions
-        c = np.abs(corr_vector(X_tr[:, pool], y_tr))
-        v = X_tr[:: max(1, len(X_tr) // 20_000)][:, pool].var(axis=0)
-        loud = v >= np.quantile(v, CFG.SHADOW_VAR_Q)
-        quiet = np.where(loud, -c, -np.inf)           # among loud, quietest first
-        ranked = [pool[i] for i in np.argsort(-quiet)]
-    elif spec.family == "periphery":
-        # v10: motion in the corner of the eye -- |corr| shift between the
-        # early 75% and late 25% of the fold, discounted where the mycelium
-        # is already thick (everyone is fixating there anyway)
-        cut = max(100, int(0.75 * len(y_tr)))
-        c_early = np.abs(corr_vector(X_tr[:cut][:, pool], y_tr[:cut]))
-        c_late = (np.abs(corr_vector(X_tr[cut:][:, pool], y_tr[cut:]))
-                  if len(y_tr) - cut >= 100 else c_early)
-        shift = np.abs(c_late - c_early)
-        pher = np.array([MYCELIUM.get(int(i), 0.0) for i in pool], np.float64)
-        ranked = [pool[i] for i in np.argsort(-(shift / (1.0 + 10.0 * pher)))]
-    elif spec.family == "springs":
-        # v13 persistence wells: slow geology, not fast weather -- rank by
-        # lag-1 self-autocorrelation x |corr| (a spring that flows today
-        # flowed yesterday too); both measured on the training fold only
-        c = np.abs(corr_vector(X_tr[:, pool], y_tr))
-        sub = X_tr[:: max(1, len(X_tr) // 20_000)][:, pool]
-        if len(sub) >= 200:
-            a, b = sub[:-1], sub[1:]
-            az = (a - a.mean(0)) / (a.std(0) + 1e-9)
-            bz = (b - b.mean(0)) / (b.std(0) + 1e-9)
-            ac1 = np.clip((az * bz).mean(0), 0.0, None)
-            ranked = [pool[i] for i in np.argsort(-(ac1 * c))]
-        else:
-            ranked = [pool[i] for i in np.argsort(-c)]
-    elif spec.family == "watershed":
-        # v13 valley specialists: how much the BEST single-terrain |corr|
-        # exceeds the pooled |corr| -- the expert of ONE valley (the exact
-        # complement of 'weather', which demands all-band robustness)
-        c = np.abs(corr_vector(X_tr[:, pool], y_tr))
-        if ATLAS is not None:
-            t_ids = ATLAS.assign(X_tr)
-            best_t = np.zeros(len(pool), np.float64)
-            seen_t = 0
-            for t in np.unique(t_ids):
-                m = t_ids == t
-                if m.sum() < 300:
-                    continue
-                best_t = np.maximum(best_t, np.abs(corr_vector(X_tr[m][:, pool], y_tr[m])))
-                seen_t += 1
-            ranked = ([pool[i] for i in np.argsort(-(best_t - c))] if seen_t >= 2
-                      else [pool[i] for i in np.argsort(-c)])
-        else:
-            ranked = [pool[i] for i in np.argsort(-c)]
-    elif spec.family == "echo":
-        # v13: columns still ringing with YESTERDAY'S outcome -- ranked by
-        # |corr(x_t, y_{t-1})| on the training fold. The model still maps
-        # x -> y; only the RANKING listens backward (no test-time y needed).
-        if len(y_tr) > 300:
-            c = np.abs(corr_vector(X_tr[1:][:, pool], y_tr[:-1]))
-        else:
-            c = np.abs(corr_vector(X_tr[:, pool], y_tr))
-        ranked = [pool[i] for i in np.argsort(-c)]
-    elif spec.family == "fault":
-        # v16 CRACKS: rank features by the largest DISCONTINUITY in their
-        # per-segment corr between ADJACENT time segments -- where the
-        # feature's relationship to y FRACTURES at a regime boundary. The
-        # complement of 'stable'/'springs': fault surfaces the breaks so a
-        # regime-aware skill (recency, caravan, weather) can model them.
-        segs = np.unique(seg_tr)
-        if len(segs) >= 3:
-            per = []
-            for s in segs:
-                m = seg_tr == s
-                per.append(corr_vector(X_tr[m][:, pool], y_tr[m]) if m.sum() >= 50
-                           else np.zeros(len(pool)))
-            P = np.vstack(per)
-            frac = np.abs(np.diff(P, axis=0)).max(axis=0)     # biggest adjacent jump
-            ranked = [pool[i] for i in np.argsort(-frac)]
-        else:
-            c = np.abs(corr_vector(X_tr[:, pool], y_tr))
-            ranked = [pool[i] for i in np.argsort(-c)]
-    elif spec.family == "invariant":
-        # v19 INVARIANT FEATURE COURT (causal robustness): not "which features
-        # correlate most" but "which keep their relationship to y across MANY
-        # ENVIRONMENTS" -- time segments AND target-free terrain/weather states.
-        # score = mean|corr| - lambda * std(corr across worlds). Distinct from
-        # 'stable' (temporal only): invariance survives environment partitions,
-        # the features least likely to break under regime shift.
-        worlds = []
-        for s in np.unique(seg_tr):
-            m = seg_tr == s
-            if m.sum() >= 80:
-                worlds.append(corr_vector(X_tr[m][:, pool], y_tr[m]))
-        for organ in (ATLAS, GAUGE):
-            if organ is not None:
-                try:
-                    ids = organ.assign(X_tr)
-                    for s in np.unique(ids):
-                        m = ids == s
-                        if m.sum() >= 80:
-                            worlds.append(corr_vector(X_tr[m][:, pool], y_tr[m]))
-                except Exception:
-                    pass
-        if len(worlds) >= 3:
-            W = np.vstack(worlds)
-            score = np.abs(W.mean(axis=0)) - np.std(W, axis=0)   # mean signal minus cross-world instability
-            ranked = [pool[i] for i in np.argsort(-score)]
-        else:
-            c = np.abs(corr_vector(X_tr[:, pool], y_tr))
-            ranked = [pool[i] for i in np.argsort(-c)]
-    elif spec.family == "stabsel":
-        # v24 STABILITY SELECTION (Meinshausen-Buhlmann): rank features by how
-        # OFTEN they survive an L1 (Lasso) fit across bootstrap subsamples of
-        # the training fold -- finite-sample false-discovery control, the
-        # principled "which of 800 features are real". Pre-screen to the top
-        # STABSEL_POOL by |corr| (fold-honest), stabilize among those, append
-        # the rest. Cached per (fold, family) so it is paid once, not per lesson.
-        c = np.abs(corr_vector(X_tr[:, pool], y_tr))
-        order0 = np.argsort(-c)
-        ntop = min(CFG.STABSEL_POOL, len(pool))
-        cand = [pool[i] for i in order0[:ntop]]
-        rest = [pool[i] for i in order0[ntop:]]
-        try:
-            step = max(1, len(X_tr) // 20000)
-            Xc = X_tr[::step][:, cand].astype(np.float64)
-            yc = y_tr[::step].astype(np.float64)
-            Xc = (Xc - Xc.mean(0)) / (Xc.std(0) + 1e-9)
-            yc = yc - yc.mean()
-            freq = np.zeros(len(cand), np.float64)
-            rng_s = np.random.default_rng(stable_seed(CFG.SEED, "stabsel", len(cand), len(Xc)))
-            nB = max(2, int(CFG.STABSEL_BOOT))
-            half = max(2, len(cand) // 2)
-            for _ in range(nB):
-                bi = rng_s.integers(0, len(Xc), len(Xc))
-                jc = rng_s.choice(len(cand), size=half, replace=False)
-                try:
-                    m = Lasso(alpha=CFG.STABSEL_ALPHA, max_iter=300)
-                    m.fit(Xc[bi][:, jc], yc[bi])
-                    freq[jc[np.abs(m.coef_) > 1e-8]] += 1.0
-                except Exception:
-                    pass
-            freq /= nB
-            ranked = [cand[i] for i in np.argsort(-freq, kind="stable")] + rest
-        except Exception:
-            ranked = [pool[i] for i in order0]
-    elif spec.family == "irm":
-        # v24 INVARIANT-RISK (IRM-flavoured) feature selection: keep features
-        # whose univariate SLOPE to y is INVARIANT across ENVIRONMENTS (time
-        # segments + target-free terrain/weather states). score = |mean_e b_e|
-        # - std_e(b_e) - penalty*signflip*|mean_e b_e|. The slope twin of
-        # 'invariant' (which uses |corr|), explicitly punishing sign flips --
-        # the causally-stable signal least likely to break under regime shift.
-        envs = []
-        for s in np.unique(seg_tr):
-            m = seg_tr == s
-            if m.sum() >= 80:
-                envs.append(m)
-        for organ in (ATLAS, GAUGE):
-            if organ is not None:
-                try:
-                    ids = organ.assign(X_tr)
-                    for s in np.unique(ids):
-                        m = ids == s
-                        if m.sum() >= 80:
-                            envs.append(m)
-                except Exception:
-                    pass
-        if len(envs) >= 3:
-            slopes = []
-            for m in envs:
-                Xe = X_tr[m][:, pool].astype(np.float64)
-                ye = y_tr[m].astype(np.float64)
-                Xz = (Xe - Xe.mean(0)) / (Xe.std(0) + 1e-9)
-                slopes.append((Xz * (ye - ye.mean())[:, None]).mean(0))   # univariate slope/feature
-            S = np.vstack(slopes)
-            mean_b = np.abs(S.mean(axis=0))
-            std_b = S.std(axis=0)
-            flip = np.mean(np.sign(S) != np.sign(S.mean(axis=0))[None, :], axis=0)
-            score = mean_b - std_b - CFG.IRM_SIGNFLIP_PENALTY * flip * mean_b
-            ranked = [pool[i] for i in np.argsort(-score)]
-        else:
-            c = np.abs(corr_vector(X_tr[:, pool], y_tr))
-            ranked = [pool[i] for i in np.argsort(-c)]
-    elif spec.family == "phyllotaxis":
-        # v16 SPIRALS: sunflower-seed packing maximizes coverage. Order
-        # features by |corr|, then SELECT by a golden-ratio low-discrepancy
-        # stride so the chosen viewport spreads across the corr spectrum
-        # (strong + medium together) -- deterministic decorrelation by optimal
-        # spacing, the phyllotaxis dual of greedy 'decor'.
-        c = np.abs(corr_vector(X_tr[:, pool], y_tr))
-        by_corr = [pool[i] for i in np.argsort(-c)]
-        nN = len(by_corr)
-        phi = 0.6180339887498949
-        order, seen = [], set()
-        for i in range(nN):
-            p = int((i * phi % 1.0) * nN)
-            while p in seen:
-                p = (p + 1) % nN
-            seen.add(p)
-            order.append(by_corr[p])
-        ranked = order
-    elif spec.family == "compass":
-        # v11 bird multi-sensor navigation: rank by AGREEMENT across three
-        # target-free frames -- magnetic (terrain separation), sun (time
-        # stability across segments), star (weather-band robustness). The
-        # features all compasses point at are true north. Restricted to the
-        # strongest |corr| candidates so the three rank-agreements are cheap.
-        c = np.abs(corr_vector(X_tr[:, pool], y_tr))
-        cand = [pool[i] for i in np.argsort(-c)[: min(CFG.COMPASS_POOL, len(pool))]]
-        ranks = []
-        # sun compass: stability across time segments (mean - std of per-seg corr)
-        ranks.append(_compass_rankvec(_rank_stable(X_tr, y_tr, seg_tr, cand), cand))
-        # magnetic compass: separation between terrains (atlas f_rank), target-free
-        if ATLAS is not None:
-            ranks.append(_compass_rankvec(ATLAS.f_rank(X_tr, cand), cand))
-        # star compass: weakest-weather-band robustness, target-free bands
-        if GAUGE is not None:
-            wth = GAUGE.assign(X_tr)
-            worst = np.full(len(cand), np.inf, np.float64)
-            seen = 0
-            for s in np.unique(wth):
-                m = wth == s
-                if m.sum() < 300:
-                    continue
-                worst = np.minimum(worst, np.abs(corr_vector(X_tr[m][:, cand], y_tr[m])))
-                seen += 1
-            if seen >= 2:
-                ranks.append(_compass_rankvec([cand[i] for i in np.argsort(-worst)], cand))
-        consensus = np.mean(np.vstack(ranks), axis=0) if ranks else c[np.argsort(-c)][: len(cand)]
-        ranked = [cand[i] for i in np.argsort(consensus)] + [p for p in pool if p not in set(cand)]
-    elif spec.family == "decor":
-        base_key = (sig, "top")
-        base = _RANK_CACHE.get(base_key)
-        if base is None:
-            c = np.abs(corr_vector(X_tr[:, pool], y_tr))
-            base = [pool[i] for i in np.argsort(-c)]
-            _RANK_CACHE[base_key] = base
-        ranked = _rank_decor(X_tr, base, spec.k)
-    else:
-        c = np.abs(corr_vector(X_tr[:, pool], y_tr))
-        ranked = [pool[i] for i in np.argsort(-c)]
+    ranked = RANKERS.get(spec.family, _rank_by_corr)(spec, X_tr, y_tr, seg_tr, pool, sig)
     if spec.family in ("top", "anon", "stable", "lastN", "dawn", "both_clocks",
                        "springs", "watershed", "echo"):
         # v14 repellent stigmergy: poisoned columns (predator kills + trap
