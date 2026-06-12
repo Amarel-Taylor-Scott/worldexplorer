@@ -12,11 +12,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 ENGINE = ROOT / "worldexplorer" / "_engine.py"
-DEFAULT_OUT = ROOT.parent / "kaggle" / "drw_world_explorer_v28" / "kernel.py"
+DEFAULT_OUT = ROOT.parent / "kaggle" / "drw_world_explorer_v29" / "kernel.py"
 
 BANNER = '''\
 # =============================================================================
-# DRW world-explorer v28 -- single-cell Kaggle kernel
+# DRW world-explorer v29 -- single-cell Kaggle kernel
 # (engine built from worldexplorer/engine_src; do not edit here, edit the repo)
 #
 # HOW TO RUN
@@ -37,6 +37,9 @@ BANNER = '''\
 #   - v27 anti-overfit SHIPPING COURT + cross-run LEARNING LEDGER.
 #   - v28 sign_stability family (4th-place sign-flip gate) + interior-block
 #     robust-CV partitions (train oldest+newest, validate middle).
+#   - v29 pls_weight family (PLS-as-selector, the private-0.099 recipe):
+#     multivariate |coef| ranking that spends k on DISTINCT signals instead of
+#     collinear copies.
 #   - LIGHT-SEARCH budget (the measured sealed-cliff lever: the 3 best private
 #     runs were 41-70 min; every 200+ min run regressed).
 # =============================================================================
@@ -44,7 +47,7 @@ BANNER = '''\
 
 OVERRIDES = '''\
 
-# ---- v28 KAGGLE RUN OVERRIDES (the only knobs changed vs library defaults) --
+# ---- v29 KAGGLE RUN OVERRIDES (the only knobs changed vs library defaults) --
 CFG.TIME_BUDGET_MIN = 90.0   # LIGHT SEARCH: v8/v9/v11 (41-70 min) are the 3 best
                              # private runs; every 200+ min run fell off the
                              # sealed cliff. The governor handles the rest.
