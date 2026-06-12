@@ -12,11 +12,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 ENGINE = ROOT / "worldexplorer" / "_engine.py"
-DEFAULT_OUT = ROOT.parent / "kaggle" / "drw_world_explorer_v31" / "kernel.py"
+DEFAULT_OUT = ROOT.parent / "kaggle" / "drw_world_explorer_v32" / "kernel.py"
 
 BANNER = '''\
 # =============================================================================
-# DRW world-explorer v31 -- single-cell Kaggle kernel
+# DRW world-explorer v32 -- single-cell Kaggle kernel
 # (engine built from worldexplorer/engine_src; do not edit here, edit the repo)
 #
 # HOW TO RUN
@@ -48,6 +48,11 @@ BANNER = '''\
 #     robust selector; see testlike_report.json (holdout AUC = drift gauge).
 #   - v31 REDUNDANCY/CROWDING + winner-network reports: new_info per member,
 #     latent-factor crowding, prediction-community graph.
+#   - v32 PRESSURE ACTIVATED (v20 gauge was never fit -- latent bug): the
+#     pressure family ranks for real + pressure_moe competes in the
+#     tournament. Plus: segment senate, prediction-distribution shift,
+#     redundancy floor (new_info >= 0.05 at admission), forward-chosen
+#     factor-neutral blend (margin-gated), room_transition family.
 #   - LIGHT-SEARCH budget (the measured sealed-cliff lever: the 3 best private
 #     runs were 41-70 min; every 200+ min run regressed).
 # =============================================================================
@@ -55,7 +60,7 @@ BANNER = '''\
 
 OVERRIDES = '''\
 
-# ---- v31 KAGGLE RUN OVERRIDES (the only knobs changed vs library defaults) --
+# ---- v32 KAGGLE RUN OVERRIDES (the only knobs changed vs library defaults) --
 CFG.TIME_BUDGET_MIN = 90.0   # LIGHT SEARCH: v8/v9/v11 (41-70 min) are the 3 best
                              # private runs; every 200+ min run fell off the
                              # sealed cliff. The governor handles the rest.
