@@ -12,11 +12,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 ENGINE = ROOT / "worldexplorer" / "_engine.py"
-DEFAULT_OUT = ROOT.parent / "kaggle" / "drw_world_explorer_v30" / "kernel.py"
+DEFAULT_OUT = ROOT.parent / "kaggle" / "drw_world_explorer_v31" / "kernel.py"
 
 BANNER = '''\
 # =============================================================================
-# DRW world-explorer v30 -- single-cell Kaggle kernel
+# DRW world-explorer v31 -- single-cell Kaggle kernel
 # (engine built from worldexplorer/engine_src; do not edit here, edit the repo)
 #
 # HOW TO RUN
@@ -43,6 +43,11 @@ BANNER = '''\
 #   - v30 INITIAL WIDE-PATH BIAS: the search currency starts width-heavy
 #     (0.8 -> 0.5 anneal over lessons) so early exploration prefers wide
 #     robust trails; corr(width, decay) is measured into the ledger.
+#   - v31 TEST-LIKENESS COURT: a target-free working-vs-test classifier (X
+#     only, no labels/LB) adds validate-on-most-test-like partitions to the
+#     robust selector; see testlike_report.json (holdout AUC = drift gauge).
+#   - v31 REDUNDANCY/CROWDING + winner-network reports: new_info per member,
+#     latent-factor crowding, prediction-community graph.
 #   - LIGHT-SEARCH budget (the measured sealed-cliff lever: the 3 best private
 #     runs were 41-70 min; every 200+ min run regressed).
 # =============================================================================
@@ -50,7 +55,7 @@ BANNER = '''\
 
 OVERRIDES = '''\
 
-# ---- v30 KAGGLE RUN OVERRIDES (the only knobs changed vs library defaults) --
+# ---- v31 KAGGLE RUN OVERRIDES (the only knobs changed vs library defaults) --
 CFG.TIME_BUDGET_MIN = 90.0   # LIGHT SEARCH: v8/v9/v11 (41-70 min) are the 3 best
                              # private runs; every 200+ min run fell off the
                              # sealed cliff. The governor handles the rest.
