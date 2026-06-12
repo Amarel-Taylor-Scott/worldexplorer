@@ -1476,6 +1476,19 @@ class HarnessConfig:
     REDUNDANCY_REPORT: bool = True
     FACTOR_COUNT: int = 6              # target-free PCA factors for exposure measurement
 
+    # v32 (IDEAS_ZOO §68 tranche 2). PRESSURE was built in v20 but NEVER FIT by
+    # the harness (latent bug, found 2026-06-12) -- v32 fits it, activating the
+    # pressure ranker family for real and enabling pressure-conditional blending.
+    PRESSURE_MOE: bool = True          # pressure-state-conditional blending strategy (one-door apply_weights_rows)
+    SENATE_REPORT: bool = True         # segment_senate.csv: per-segment yes/abstain/veto votes per member
+    SENATE_YES: float = 0.01           # a segment votes yes above this corr
+    SENATE_VETO: float = -0.02         # a segment vetoes below this corr
+    PRED_DIST_REPORT: bool = True      # prediction_distribution_shift.csv: working blend vs test prediction
+    REDUNDANCY_MIN_NEW_INFO: float = 0.05  # _try_admit floor on 1-R^2 vs admitted members (0 = exact no-op)
+    FACTOR_NEUTRAL: bool = True        # forward-chosen factor-neutralization of the blend (default raw = no-op)
+    FACTOR_NEUTRAL_FRACS: tuple[float, ...] = (0.25, 0.5, 1.0)   # neutralization fractions auditioned on forward
+    ROOMTRANS_FAMILY: bool = True      # 'room_transition' ranker family (signal at regime boundaries)
+
     # v30.1 WINNER NETWORK (observation only, IDEAS.md 1a): the promoted trails
     # as a graph -- output-corr edges, leader-cluster communities. Feeds the
     # queued network-aware member-selection cap (1b) with measurements first.
@@ -1940,10 +1953,12 @@ FAMILIES = ("top", "anon", "market", "decor", "stable", "medoid", "lastN", "dawn
             "head", "mid", "tail",   # v22: positional feature-ORDER blocks (general; feature order is signal)
             "stabsel", "irm") \
     + (("sign_stability",) if CFG.SIGNSTAB_FAMILY else ()) \
-    + (("pls_weight",) if CFG.PLSRANK_FAMILY else ())
+    + (("pls_weight",) if CFG.PLSRANK_FAMILY else ()) \
+    + (("room_transition",) if CFG.ROOMTRANS_FAMILY else ())
 # v24: stabsel/irm = bootstrap-L1 stability selection + invariant-risk (slope) selection
 # v28: sign_stability = the 4th-place sign-flip gate as a ranker family (flag-gated)
 # v29: pls_weight = PLS-as-selector (multivariate |coef| ranking; flag-gated)
+# v32: room_transition = signal at regime boundaries (rows whose room just changed)
 ALL_TRANSFORMS = ("identity", "quantize8", "quantize4", "quantize2", "rank", "sign_only",
                   "pca", "pair_aug", "rand_proj", "signed_hadamard", "pca_aug", "foveated",
                   "fold_abs", "fold_pairs", "dual_exposure", "doppler", "lateral_line",
@@ -2785,6 +2800,30 @@ def _rank_pls_weight(spec: ViewportSpec, X_tr: np.ndarray, y_tr: np.ndarray,
         return [pool[i] for i in order0]
 
 
+def _rank_room_transition(spec: ViewportSpec, X_tr: np.ndarray, y_tr: np.ndarray,
+                          seg_tr: np.ndarray, pool: list[int], sig: tuple) -> list[int]:
+    # v32 ROOM-TRANSITION family (IDEAS_ZOO v61 §32): rank features by |corr|
+    # measured ONLY on rows whose target-free room (terrain or weather state)
+    # just CHANGED from the previous row -- where the row CAME FROM matters.
+    # Features that carry signal at regime boundaries are exactly what global
+    # models average away; the doors judge whether boundary alpha is real.
+    mask = np.zeros(len(y_tr), bool)
+    seen = 0
+    for organ in (ATLAS, GAUGE, PRESSURE):
+        if organ is not None:
+            try:
+                ids = organ.assign(X_tr)
+                mask[1:] |= ids[1:] != ids[:-1]
+                seen += 1
+            except Exception:
+                pass
+    if seen and int(mask.sum()) >= 300:
+        c = np.abs(corr_vector(X_tr[mask][:, pool], y_tr[mask]))
+    else:
+        c = np.abs(corr_vector(X_tr[:, pool], y_tr))
+    return [pool[i] for i in np.argsort(-c)]
+
+
 def _rank_decor_family(spec: ViewportSpec, X_tr: np.ndarray, y_tr: np.ndarray,
                        seg_tr: np.ndarray, pool: list[int], sig: tuple) -> list[int]:
     base_key = (sig, "top")
@@ -2816,6 +2855,7 @@ RANKERS: dict[str, Callable[..., list[int]]] = {
     "irm": _rank_irm,
     "sign_stability": _rank_sign_stability,
     "pls_weight": _rank_pls_weight,
+    "room_transition": _rank_room_transition,
     "phyllotaxis": _rank_phyllotaxis,
     "compass": _rank_compass,
     "decor": _rank_decor_family,
@@ -6431,7 +6471,8 @@ def parliament_weights(oofs: dict[str, np.ndarray], y: np.ndarray, idx: np.ndarr
 
 def nested_ensemble(oofs: dict[str, np.ndarray], y: np.ndarray, seg: np.ndarray,
                     cfg: HarnessConfig, embargo: int,
-                    wth: np.ndarray | None = None) -> dict[str, Any]:
+                    wth: np.ndarray | None = None,
+                    prs: np.ndarray | None = None) -> dict[str, Any]:
     names = list(oofs)
     strategies = ["best_single", "equal_top", "corr_weighted", "hill_climb", "era_mean_hill",
                   "late_era_hill", "minimax_era", "parliament", "median"]
@@ -6439,6 +6480,8 @@ def nested_ensemble(oofs: dict[str, np.ndarray], y: np.ndarray, seg: np.ndarray,
         strategies.append("nnls_stack")
     if wth is not None and len(np.unique(wth)) >= 2:
         strategies.append("weather_moe")    # v9: regime-conditional blending
+    if prs is not None and len(np.unique(prs)) >= 2 and getattr(cfg, "PRESSURE_MOE", False):
+        strategies.append("pressure_moe")   # v32: microstructure-PRESSURE-conditional blending
     outer: dict[str, list[float]] = {s: [] for s in strategies}
     for inner, out_idx in purged_segment_splits(seg, cfg.N_SPLITS, embargo):
         inner_sc = {n: pearson(y[inner], oofs[n][inner]) for n in names}
@@ -6476,6 +6519,10 @@ def nested_ensemble(oofs: dict[str, np.ndarray], y: np.ndarray, seg: np.ndarray,
             g_w, st_w = weather_moe_fit(oofs, y, wth, inner, top, cfg)
             outer["weather_moe"].append(
                 pearson(y[out_idx], weather_moe_apply(oofs, wth, out_idx, g_w, st_w)))
+        if "pressure_moe" in outer:
+            g_p, st_p = weather_moe_fit(oofs, y, prs, inner, top, cfg)
+            outer["pressure_moe"].append(
+                pearson(y[out_idx], weather_moe_apply(oofs, prs, out_idx, g_p, st_p)))
     honest = {s: float(np.mean(v)) for s, v in outer.items()}
     winner = max(honest, key=honest.get)
     if honest[winner] <= honest["best_single"] + 1e-9:
@@ -6514,14 +6561,28 @@ def nested_ensemble(oofs: dict[str, np.ndarray], y: np.ndarray, seg: np.ndarray,
         # the per-state maps condition the actual blend wherever weather ids
         # exist (forward, sealed, test) -- one door, apply_weights_rows.
         weights, weather_states = weather_moe_fit(oofs, y, wth, all_idx, top_full, cfg)
+    elif winner == "pressure_moe":
+        # v32 (IDEAS_ZOO census->built): same one-door mechanics, keyed by the
+        # PRESSURE gauge's microstructure states instead of generic dispersion
+        weights, weather_states = weather_moe_fit(oofs, y, prs, all_idx, top_full, cfg)
     else:
         weights = hill_climb_generic(top_full_oofs, all_idx,
                                      lambda v: pearson(y, v)) or {top_full[0]: 1.0}
     return {"honest": honest, "winner": winner, "weights": weights, "is_median": winner == "median",
             "weather_states": weather_states,
+            "moe_gauge": ("pressure" if winner == "pressure_moe"
+                          else ("weather" if winner == "weather_moe" else None)),
             "outer": {k: list(map(float, v)) for k, v in outer.items()}}
 
 
+
+def moe_states(moe_gauge: "str | None", X: np.ndarray) -> "np.ndarray | None":
+    """v32: the one place that maps a MoE winner to its row-state assigner --
+    pressure_moe rows get PRESSURE states, everything else weather states
+    (harmless when no MoE won: apply_weights_rows ignores the vector)."""
+    if moe_gauge == "pressure" and PRESSURE is not None:
+        return PRESSURE.assign(X)
+    return GAUGE.assign(X) if GAUGE is not None else None
 class HealthMonitor:
     def __init__(self, cfg: HarnessConfig) -> None:
         self.cfg = cfg
@@ -6697,6 +6758,46 @@ def redundancy_factor_report(members: dict[str, np.ndarray],
             row["crowding_cos"] = round(float(Ccos[i, j]), 4)
         rows.append(row)
     return pd.DataFrame(rows).sort_values("new_info")
+
+def segment_senate_report(members: dict[str, np.ndarray], y: np.ndarray, seg: np.ndarray,
+                          cfg: HarnessConfig) -> pd.DataFrame:
+    """v32 SEGMENT SENATE (IDEAS_ZOO C2, observation): every time segment votes
+    on every member -- yes (corr > SENATE_YES), abstain, veto (corr <
+    SENATE_VETO). A member with a great mean but several vetoes is a few good
+    eras hiding many bad ones; era-mean metrics blur exactly this."""
+    segs = np.unique(seg)
+    rows = []
+    for nm, p in members.items():
+        per = [pearson(y[seg == s], p[seg == s]) for s in segs
+               if int((seg == s).sum()) >= 50]
+        yes = sum(1 for c in per if c > cfg.SENATE_YES)
+        veto = sum(1 for c in per if c < cfg.SENATE_VETO)
+        rows.append({"member": nm, "segments": len(per),
+                     "yes": yes, "abstain": len(per) - yes - veto, "veto": veto,
+                     "mean_corr": round(float(np.mean(per)), 5) if per else None,
+                     "worst_corr": round(float(np.min(per)), 5) if per else None,
+                     "veto_frac": round(veto / max(1, len(per)), 3)})
+    return pd.DataFrame(rows).sort_values("veto", ascending=False)
+
+
+def prediction_distribution_report(blend_oof: np.ndarray, test_pred: np.ndarray) -> pd.DataFrame:
+    """v32 PREDICTION-DISTRIBUTION SHIFT (IDEAS_ZOO v65 §43, observation):
+    moments + tail mass of the working-region blend vs the shipped test
+    prediction, both z-scored by the WORKING distribution -- test predictions
+    far more extreme than anything validation ever scored = amplitude risk."""
+    a = np.asarray(blend_oof, np.float64)
+    b = np.asarray(test_pred, np.float64)
+    mu, sd = a.mean(), a.std() + 1e-12
+    az, bz = (a - mu) / sd, (b - mu) / sd
+    def stats(v):
+        return {"mean_z": round(float(v.mean()), 4), "std_z": round(float(v.std()), 4),
+                "skew": round(float(((v - v.mean()) ** 3).mean() / (v.std() + 1e-12) ** 3), 4),
+                "kurt": round(float(((v - v.mean()) ** 4).mean() / (v.std() + 1e-12) ** 4), 4),
+                "q01": round(float(np.quantile(v, 0.01)), 4), "q99": round(float(np.quantile(v, 0.99)), 4),
+                "tail_mass_3sd": round(float(np.mean(np.abs(v) > 3.0)), 5)}
+    rows = [{"distribution": "working_blend_oof", **stats(az)},
+            {"distribution": "test_prediction", **stats(bz)}]
+    return pd.DataFrame(rows)
 # ----------------------------------------------------------------------------
 # 11. Harness orchestration
 # ----------------------------------------------------------------------------
@@ -7864,7 +7965,7 @@ class ExplorerHarness:
 
 
     def _build_atlas(self, rs: "_RunState") -> None:
-        global ATLAS, GAUGE
+        global ATLAS, GAUGE, PRESSURE
         # ---- TERRAIN ATLAS: target-free map of the space (working X only) -----
         # y never touches the atlas, so its ids are leak-free everywhere; the
         # 'terrain' family, terrain_router skill, predator terrain attack and
@@ -7889,6 +7990,16 @@ class ExplorerHarness:
         log("weather_gauge_built", states=len(rs.w_pop), populations=str(rs.w_pop),
             note="row_local__order_free__target_free")
 
+        # ---- PRESSURE GAUGE (v20, FIT FIXED in v32): the order-book twin of the
+        # weather gauge. Built in v20 but never fit by the harness -- the
+        # pressure family silently corr-fell-back in EVERY run since. Fitting it
+        # activates the family for real and enables pressure_moe blending.
+        PRESSURE = PressureGauge(rs.cfg.WEATHER_STATES).fit(rs.Xp, rs.cols)
+        rs.prs_p = PRESSURE.assign(rs.Xp)
+        rs.p_pop = {int(s): int((rs.prs_p == s).sum()) for s in np.unique(rs.prs_p)}
+        log("pressure_gauge_built", states=len(rs.p_pop), populations=str(rs.p_pop),
+            note="v20 gauge, fit for the first time (latent bug fixed in v32)")
+
         # ---- v31 latent FACTORS (target-free, IDEAS_ZOO B2): top PCA factor
         # scores of the probe matrix -- the exposure substrate for the member
         # redundancy/crowding report ("different names, same latent bet").
@@ -7900,6 +8011,8 @@ class ExplorerHarness:
                 _, _, vt_f = np.linalg.svd(sub_f - mu_f, full_matrices=False)
                 comps_f = vt_f[: int(rs.cfg.FACTOR_COUNT)].astype(np.float32)
                 rs.factor_scores = ((rs.Xp - mu_f) @ comps_f.T).astype(np.float32)
+                rs.factor_mu, rs.factor_comps = mu_f.astype(np.float32), comps_f
+                rs.factor_dpre = int(rs.Xp.shape[1])   # pre-beacon column count
                 log("latent_factors_built", n_factors=int(comps_f.shape[0]),
                     note="target-free PCA factors; exposure substrate for crowding report")
             except Exception as e:
@@ -8623,6 +8736,19 @@ class ExplorerHarness:
                     return False
             if rs.members and max(abs(pearson(l.oof, o)) for o in rs.members.values()) > rs.cfg.MEMBER_CORR_CAP:
                 return False
+            # v32 REDUNDANCY FLOOR (IDEAS_ZOO v53 sec8): the candidate must carry
+            # information the admitted members do not already SPAN -- stricter
+            # than pairwise corr caps (a blend of two members can replicate a
+            # third that correlates with neither). 0.0 = exact no-op.
+            if rs.members and rs.cfg.REDUNDANCY_MIN_NEW_INFO > 0.0:
+                Mz = np.vstack([rs.members[nm0] for nm0 in rs.members]).astype(np.float64)
+                cz = (l.oof - float(np.mean(l.oof))) / (float(np.std(l.oof)) + 1e-12)
+                beta_r, *_ = np.linalg.lstsq(Mz.T, cz, rcond=None)
+                new_info = max(0.0, float(np.var(cz - Mz.T @ beta_r)))
+                if new_info < rs.cfg.REDUNDANCY_MIN_NEW_INFO:
+                    log("member_skipped_redundancy", key=l.key, new_info=round(new_info, 4),
+                        floor=rs.cfg.REDUNDANCY_MIN_NEW_INFO)
+                    return False
             # v14 jamming avoidance (CONSERVATIVE): fires only for a confirmed
             # near-duplicate -- high input overlap AND high output agreement.
             lcols = set(l.used_cols)
@@ -8726,7 +8852,9 @@ class ExplorerHarness:
 
 
     def _ensemble(self, rs: "_RunState") -> None:
-        rs.result = nested_ensemble(rs.members, rs.yp, rs.segp, rs.cfg, rs.embargo_p, wth=rs.wth_p)
+        rs.result = nested_ensemble(rs.members, rs.yp, rs.segp, rs.cfg, rs.embargo_p,
+                                    wth=rs.wth_p, prs=getattr(rs, "prs_p", None))
+        rs.moe_gauge = rs.result.get("moe_gauge")
         write_json(rs.result["honest"] | {"winner": rs.result["winner"]}, "ensemble_nested_assessment.json")
         log("ensemble_selected", winner=rs.result["winner"],
             honest=round(rs.result["honest"][rs.result["winner"]], 5),
@@ -8785,6 +8913,18 @@ class ExplorerHarness:
         except Exception as e:
             log("redundancy_factor_skipped", err=str(e)[:80])
 
+        # ---- v32 SEGMENT SENATE (IDEAS_ZOO C2, observation): per-segment votes
+        try:
+            if rs.cfg.SENATE_REPORT:
+                sen_df = segment_senate_report(rs.members, rs.yp, rs.segp, rs.cfg)
+                if not sen_df.empty:
+                    write_csv(sen_df, "segment_senate.csv")
+                    log("segment_senate", members=len(sen_df),
+                        max_veto=int(sen_df["veto"].max()),
+                        note="a great mean hiding many vetoed segments is the era-mean blind spot")
+        except Exception as e:
+            log("segment_senate_skipped", err=str(e)[:80])
+
 
     def _forward_holdout(self, rs: "_RunState") -> None:
         # ---- forward-drift check + forward gate (within WORKING region) --------
@@ -8804,7 +8944,7 @@ class ExplorerHarness:
             rs.fwd_rows.append({"member": rs.nm, "cv_oof_corr": rs.l.oof_corr,
                              "forward_corr": pearson(rs.y_full[rs.future], rs.p),
                              "drift_gap": rs.l.oof_corr - pearson(rs.y_full[rs.future], rs.p)})
-        rs.wth_future = GAUGE.assign(rs.X_full[rs.future]) if GAUGE is not None else None
+        rs.wth_future = moe_states(getattr(rs, "moe_gauge", None), rs.X_full[rs.future])
         rs.fwd_blend = apply_weights_rows(rs.fwd_parts, rs.w, rs.result["is_median"],
                                        rs.result["weather_states"], rs.wth_future)
         rs.forward_blend_corr = score_metric(rs.y_full[rs.future], rs.fwd_blend)
@@ -9025,6 +9165,36 @@ class ExplorerHarness:
                 log("chorus_shrinkage", beta=rs.chorus_beta, forward_after=round(rs.best_fc, 5),
                     note="blend scaled by member agreement on the forward slice (no-op unless it helps)")
 
+        # ---- v32 FACTOR-NEUTRAL blend (IDEAS_ZOO v55 sec14, no-op-safe) --------
+        # Residualize the blend against the dominant TARGET-FREE factors by a
+        # fraction chosen on the FORWARD slice (default 0 = raw). The blend's
+        # loading on a crowded latent factor is exactly what decays when the
+        # factor rotates; neutralization must clear SHAPE_MARGIN to ship.
+        rs.fn_frac, rs.fn_beta = 0.0, None
+        if (rs.cfg.FACTOR_NEUTRAL and not rs.gate_fired and not rs.final_is_median
+                and rs.final_weather is None and getattr(rs, "factor_comps", None) is not None
+                and len(rs.future) > 100
+                and all(nm in rs.fwd_parts for nm in rs.final_weights)):
+            try:
+                F_fut = ((rs.X_full[rs.future][:, : rs.factor_dpre] - rs.factor_mu)
+                         @ rs.factor_comps.T).astype(np.float64)
+                Fz_fut = (F_fut - F_fut.mean(0)) / (F_fut.std(0) + 1e-12)
+                fwd_b = sum(rs.final_weights[nm] * rs.fwd_parts[nm] for nm in rs.final_weights)
+                base_fc = pearson(rs.y_full[rs.future], fwd_b)
+                beta_f, *_ = np.linalg.lstsq(Fz_fut, fwd_b, rcond=None)
+                best_fc = base_fc
+                for frac in rs.cfg.FACTOR_NEUTRAL_FRACS:
+                    fc = pearson(rs.y_full[rs.future], fwd_b - float(frac) * (Fz_fut @ beta_f))
+                    if fc > best_fc + rs.cfg.SHAPE_MARGIN:
+                        best_fc, rs.fn_frac, rs.fn_beta = fc, float(frac), beta_f
+                if rs.fn_frac > 0:
+                    log("factor_neutral_blend", frac=rs.fn_frac,
+                        forward_before=round(base_fc, 5), forward_after=round(best_fc, 5),
+                        note="blend residualized against target-free factors (forward-chosen, margin-gated)")
+            except Exception as e:
+                rs.fn_frac, rs.fn_beta = 0.0, None
+                log("factor_neutral_skipped", err=str(e)[:80])
+
         # ---- v19 PREDICTION SHAPE ALCHEMY (no-op-safe) -----------------------
         # Audition output shapes (rank / power / tanh) on the FORWARD blend;
         # ship the best, default 'raw' (no-op). Financial labels often reward
@@ -9084,7 +9254,7 @@ class ExplorerHarness:
                 rs.p = predict_skill(rs.st, rs.X_full[rs.sealed_idx])
                 rs.sd = float(np.std(rs.p)) + 1e-9
                 rs.seal_parts[rs.nm] = ((rs.p - float(np.mean(rs.p))) / rs.sd).astype(np.float64)
-            rs.wth_seal = GAUGE.assign(rs.X_full[rs.sealed_idx]) if GAUGE is not None else None
+            rs.wth_seal = moe_states(getattr(rs, "moe_gauge", None), rs.X_full[rs.sealed_idx])
             rs.seal_blend = apply_weights_rows(rs.seal_parts, rs.final_weights, rs.final_is_median,
                                             rs.final_weather, rs.wth_seal)
             rs.sealed_corr = score_metric(rs.y_full[rs.sealed_idx], rs.seal_blend)
@@ -9109,18 +9279,36 @@ class ExplorerHarness:
             rs.sd = float(np.std(rs.p)) + 1e-9
             rs.test_parts[rs.nm] = ((rs.p - float(np.mean(rs.p))) / rs.sd).astype(np.float64)
             log("final_member_refit", member=rs.nm, weight=round(rs.final_weights[rs.nm], 3))
-        rs.wth_test = GAUGE.assign(rs.X_test) if GAUGE is not None else None
+        rs.wth_test = moe_states(getattr(rs, "moe_gauge", None), rs.X_test)
         rs.test_pred = apply_weights_rows(rs.test_parts, rs.final_weights, rs.final_is_median,
                                        rs.final_weather, rs.wth_test)
         if rs.chorus_beta > 0 and all(nm in rs.test_parts for nm in rs.final_weights):
             rs.test_pred = rs.test_pred * chorus_factor(rs.test_parts, rs.final_weights, rs.chorus_beta)
             log("chorus_applied", beta=rs.chorus_beta, note="test blend shrunk by member agreement")
+        if getattr(rs, "fn_frac", 0.0) > 0 and rs.fn_beta is not None:
+            F_te = ((rs.X_test[:, : rs.factor_dpre] - rs.factor_mu)
+                    @ rs.factor_comps.T).astype(np.float64)
+            Fz_te = (F_te - F_te.mean(0)) / (F_te.std(0) + 1e-12)
+            rs.test_pred = rs.test_pred - rs.fn_frac * (Fz_te @ rs.fn_beta)
+            log("factor_neutral_applied", frac=rs.fn_frac,
+                note="test blend residualized against target-free factors (forward-chosen)")
         if rs.ship_shape != "raw":
             rs.test_pred = _shape_pred(rs.test_pred, rs.ship_shape)
             log("shape_applied", shape=rs.ship_shape, note="test prediction remapped (forward-chosen)")
         if rs.wins["apply"]:
             rs.lo, rs.hi = np.quantile(rs.test_pred, rs.wins["best_q"]), np.quantile(rs.test_pred, 1 - rs.wins["best_q"])
             rs.test_pred = np.clip(rs.test_pred, rs.lo, rs.hi)
+        # ---- v32 PREDICTION-DISTRIBUTION SHIFT (IDEAS_ZOO v65 sec43) ----------
+        try:
+            if rs.cfg.PRED_DIST_REPORT:
+                pd_df = prediction_distribution_report(rs.blend_oof, rs.test_pred)
+                write_csv(pd_df, "prediction_distribution_shift.csv")
+                log("prediction_distribution",
+                    test_tail3sd=float(pd_df.iloc[1]["tail_mass_3sd"]),
+                    work_tail3sd=float(pd_df.iloc[0]["tail_mass_3sd"]),
+                    note="test predictions more extreme than anything validation scored = amplitude risk")
+        except Exception as e:
+            log("prediction_distribution_skipped", err=str(e)[:80])
         write_submission(np.asarray(rs.test_pred, np.float32), rs.root)
         rs.n_test = len(rs.X_test)
         del rs.X_full, rs.X_test                 # nothing below needs the matrices
@@ -9148,7 +9336,7 @@ class ExplorerHarness:
             rs.seed_bank.append(rs.l.key)
             if len(rs.seed_bank) >= rs.cfg.SEEDBANK_SIZE:
                 break
-        rs.cairn = {"version": "v31", "data_source": rs.data_source,
+        rs.cairn = {"version": "v32", "data_source": rs.data_source,
                  "gauge_edges": [float(e) for e in (GAUGE.edges if GAUGE is not None else [])],
                  "terrain_populations": rs.t_pop, "weather_populations": rs.w_pop,
                  "even_dominant": rs.n_even, "trap_count": len(TRAPS),
@@ -9170,7 +9358,7 @@ class ExplorerHarness:
                           key=lambda l: -(l.oof_corr - l.wf_corr))
             rs.decayers = list(dict.fromkeys(f"{l.skill}|{l.family}" for l in rs.decj))[: rs.cfg.LEDGER_MAX_DECAYERS]
             rs.gcount = int((rs.prev_led.get("governor") or {}).get("count", 0)) + 1
-            rs.ledger = {"version": "v31", "data_source": rs.data_source,
+            rs.ledger = {"version": "v32", "data_source": rs.data_source,
                       "governor": {"beta": round(float(GOVERNOR.get("beta", 0.0)), 5),
                                    "lambda": round(float(GOVERNOR.get("lambda", 0.0)), 5),
                                    "width_decay_corr": (round(rs.width_decay_corr, 5)
@@ -9288,7 +9476,7 @@ class ExplorerHarness:
              "No previous cairn was found; ours now stands."),
         ]
         write_chronicle({
-            "title": f"DRW world-explorer v31 ({rs.data_source})",
+            "title": f"DRW world-explorer v32 ({rs.data_source})",
             "features": len(rs.cols), "train_rows": rs.n, "sealed_rows": int(len(rs.sealed_idx)),
             "data_source": rs.data_source, "terrain_pop": rs.t_pop, "weather_pop": rs.w_pop,
             "even_dominant": rs.n_even, "explorer_lines": rs.explorer_lines,

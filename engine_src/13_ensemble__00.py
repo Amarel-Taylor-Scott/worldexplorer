@@ -160,7 +160,8 @@ def parliament_weights(oofs: dict[str, np.ndarray], y: np.ndarray, idx: np.ndarr
 
 def nested_ensemble(oofs: dict[str, np.ndarray], y: np.ndarray, seg: np.ndarray,
                     cfg: HarnessConfig, embargo: int,
-                    wth: np.ndarray | None = None) -> dict[str, Any]:
+                    wth: np.ndarray | None = None,
+                    prs: np.ndarray | None = None) -> dict[str, Any]:
     names = list(oofs)
     strategies = ["best_single", "equal_top", "corr_weighted", "hill_climb", "era_mean_hill",
                   "late_era_hill", "minimax_era", "parliament", "median"]
@@ -168,6 +169,8 @@ def nested_ensemble(oofs: dict[str, np.ndarray], y: np.ndarray, seg: np.ndarray,
         strategies.append("nnls_stack")
     if wth is not None and len(np.unique(wth)) >= 2:
         strategies.append("weather_moe")    # v9: regime-conditional blending
+    if prs is not None and len(np.unique(prs)) >= 2 and getattr(cfg, "PRESSURE_MOE", False):
+        strategies.append("pressure_moe")   # v32: microstructure-PRESSURE-conditional blending
     outer: dict[str, list[float]] = {s: [] for s in strategies}
     for inner, out_idx in purged_segment_splits(seg, cfg.N_SPLITS, embargo):
         inner_sc = {n: pearson(y[inner], oofs[n][inner]) for n in names}
@@ -205,6 +208,10 @@ def nested_ensemble(oofs: dict[str, np.ndarray], y: np.ndarray, seg: np.ndarray,
             g_w, st_w = weather_moe_fit(oofs, y, wth, inner, top, cfg)
             outer["weather_moe"].append(
                 pearson(y[out_idx], weather_moe_apply(oofs, wth, out_idx, g_w, st_w)))
+        if "pressure_moe" in outer:
+            g_p, st_p = weather_moe_fit(oofs, y, prs, inner, top, cfg)
+            outer["pressure_moe"].append(
+                pearson(y[out_idx], weather_moe_apply(oofs, prs, out_idx, g_p, st_p)))
     honest = {s: float(np.mean(v)) for s, v in outer.items()}
     winner = max(honest, key=honest.get)
     if honest[winner] <= honest["best_single"] + 1e-9:
@@ -243,11 +250,25 @@ def nested_ensemble(oofs: dict[str, np.ndarray], y: np.ndarray, seg: np.ndarray,
         # the per-state maps condition the actual blend wherever weather ids
         # exist (forward, sealed, test) -- one door, apply_weights_rows.
         weights, weather_states = weather_moe_fit(oofs, y, wth, all_idx, top_full, cfg)
+    elif winner == "pressure_moe":
+        # v32 (IDEAS_ZOO census->built): same one-door mechanics, keyed by the
+        # PRESSURE gauge's microstructure states instead of generic dispersion
+        weights, weather_states = weather_moe_fit(oofs, y, prs, all_idx, top_full, cfg)
     else:
         weights = hill_climb_generic(top_full_oofs, all_idx,
                                      lambda v: pearson(y, v)) or {top_full[0]: 1.0}
     return {"honest": honest, "winner": winner, "weights": weights, "is_median": winner == "median",
             "weather_states": weather_states,
+            "moe_gauge": ("pressure" if winner == "pressure_moe"
+                          else ("weather" if winner == "weather_moe" else None)),
             "outer": {k: list(map(float, v)) for k, v in outer.items()}}
 
 
+
+def moe_states(moe_gauge: "str | None", X: np.ndarray) -> "np.ndarray | None":
+    """v32: the one place that maps a MoE winner to its row-state assigner --
+    pressure_moe rows get PRESSURE states, everything else weather states
+    (harmless when no MoE won: apply_weights_rows ignores the vector)."""
+    if moe_gauge == "pressure" and PRESSURE is not None:
+        return PRESSURE.assign(X)
+    return GAUGE.assign(X) if GAUGE is not None else None

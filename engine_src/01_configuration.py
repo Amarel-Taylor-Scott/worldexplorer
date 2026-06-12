@@ -381,6 +381,19 @@ class HarnessConfig:
     REDUNDANCY_REPORT: bool = True
     FACTOR_COUNT: int = 6              # target-free PCA factors for exposure measurement
 
+    # v32 (IDEAS_ZOO §68 tranche 2). PRESSURE was built in v20 but NEVER FIT by
+    # the harness (latent bug, found 2026-06-12) -- v32 fits it, activating the
+    # pressure ranker family for real and enabling pressure-conditional blending.
+    PRESSURE_MOE: bool = True          # pressure-state-conditional blending strategy (one-door apply_weights_rows)
+    SENATE_REPORT: bool = True         # segment_senate.csv: per-segment yes/abstain/veto votes per member
+    SENATE_YES: float = 0.01           # a segment votes yes above this corr
+    SENATE_VETO: float = -0.02         # a segment vetoes below this corr
+    PRED_DIST_REPORT: bool = True      # prediction_distribution_shift.csv: working blend vs test prediction
+    REDUNDANCY_MIN_NEW_INFO: float = 0.05  # _try_admit floor on 1-R^2 vs admitted members (0 = exact no-op)
+    FACTOR_NEUTRAL: bool = True        # forward-chosen factor-neutralization of the blend (default raw = no-op)
+    FACTOR_NEUTRAL_FRACS: tuple[float, ...] = (0.25, 0.5, 1.0)   # neutralization fractions auditioned on forward
+    ROOMTRANS_FAMILY: bool = True      # 'room_transition' ranker family (signal at regime boundaries)
+
     # v30.1 WINNER NETWORK (observation only, IDEAS.md 1a): the promoted trails
     # as a graph -- output-corr edges, leader-cluster communities. Feeds the
     # queued network-aware member-selection cap (1b) with measurements first.

@@ -527,6 +527,30 @@ def _rank_pls_weight(spec: ViewportSpec, X_tr: np.ndarray, y_tr: np.ndarray,
         return [pool[i] for i in order0]
 
 
+def _rank_room_transition(spec: ViewportSpec, X_tr: np.ndarray, y_tr: np.ndarray,
+                          seg_tr: np.ndarray, pool: list[int], sig: tuple) -> list[int]:
+    # v32 ROOM-TRANSITION family (IDEAS_ZOO v61 §32): rank features by |corr|
+    # measured ONLY on rows whose target-free room (terrain or weather state)
+    # just CHANGED from the previous row -- where the row CAME FROM matters.
+    # Features that carry signal at regime boundaries are exactly what global
+    # models average away; the doors judge whether boundary alpha is real.
+    mask = np.zeros(len(y_tr), bool)
+    seen = 0
+    for organ in (ATLAS, GAUGE, PRESSURE):
+        if organ is not None:
+            try:
+                ids = organ.assign(X_tr)
+                mask[1:] |= ids[1:] != ids[:-1]
+                seen += 1
+            except Exception:
+                pass
+    if seen and int(mask.sum()) >= 300:
+        c = np.abs(corr_vector(X_tr[mask][:, pool], y_tr[mask]))
+    else:
+        c = np.abs(corr_vector(X_tr[:, pool], y_tr))
+    return [pool[i] for i in np.argsort(-c)]
+
+
 def _rank_decor_family(spec: ViewportSpec, X_tr: np.ndarray, y_tr: np.ndarray,
                        seg_tr: np.ndarray, pool: list[int], sig: tuple) -> list[int]:
     base_key = (sig, "top")
@@ -558,6 +582,7 @@ RANKERS: dict[str, Callable[..., list[int]]] = {
     "irm": _rank_irm,
     "sign_stability": _rank_sign_stability,
     "pls_weight": _rank_pls_weight,
+    "room_transition": _rank_room_transition,
     "phyllotaxis": _rank_phyllotaxis,
     "compass": _rank_compass,
     "decor": _rank_decor_family,

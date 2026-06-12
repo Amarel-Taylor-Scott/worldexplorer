@@ -17,10 +17,12 @@ FAMILIES = ("top", "anon", "market", "decor", "stable", "medoid", "lastN", "dawn
             "head", "mid", "tail",   # v22: positional feature-ORDER blocks (general; feature order is signal)
             "stabsel", "irm") \
     + (("sign_stability",) if CFG.SIGNSTAB_FAMILY else ()) \
-    + (("pls_weight",) if CFG.PLSRANK_FAMILY else ())
+    + (("pls_weight",) if CFG.PLSRANK_FAMILY else ()) \
+    + (("room_transition",) if CFG.ROOMTRANS_FAMILY else ())
 # v24: stabsel/irm = bootstrap-L1 stability selection + invariant-risk (slope) selection
 # v28: sign_stability = the 4th-place sign-flip gate as a ranker family (flag-gated)
 # v29: pls_weight = PLS-as-selector (multivariate |coef| ranking; flag-gated)
+# v32: room_transition = signal at regime boundaries (rows whose room just changed)
 ALL_TRANSFORMS = ("identity", "quantize8", "quantize4", "quantize2", "rank", "sign_only",
                   "pca", "pair_aug", "rand_proj", "signed_hadamard", "pca_aug", "foveated",
                   "fold_abs", "fold_pairs", "dual_exposure", "doppler", "lateral_line",

@@ -173,3 +173,43 @@ def redundancy_factor_report(members: dict[str, np.ndarray],
             row["crowding_cos"] = round(float(Ccos[i, j]), 4)
         rows.append(row)
     return pd.DataFrame(rows).sort_values("new_info")
+
+def segment_senate_report(members: dict[str, np.ndarray], y: np.ndarray, seg: np.ndarray,
+                          cfg: HarnessConfig) -> pd.DataFrame:
+    """v32 SEGMENT SENATE (IDEAS_ZOO C2, observation): every time segment votes
+    on every member -- yes (corr > SENATE_YES), abstain, veto (corr <
+    SENATE_VETO). A member with a great mean but several vetoes is a few good
+    eras hiding many bad ones; era-mean metrics blur exactly this."""
+    segs = np.unique(seg)
+    rows = []
+    for nm, p in members.items():
+        per = [pearson(y[seg == s], p[seg == s]) for s in segs
+               if int((seg == s).sum()) >= 50]
+        yes = sum(1 for c in per if c > cfg.SENATE_YES)
+        veto = sum(1 for c in per if c < cfg.SENATE_VETO)
+        rows.append({"member": nm, "segments": len(per),
+                     "yes": yes, "abstain": len(per) - yes - veto, "veto": veto,
+                     "mean_corr": round(float(np.mean(per)), 5) if per else None,
+                     "worst_corr": round(float(np.min(per)), 5) if per else None,
+                     "veto_frac": round(veto / max(1, len(per)), 3)})
+    return pd.DataFrame(rows).sort_values("veto", ascending=False)
+
+
+def prediction_distribution_report(blend_oof: np.ndarray, test_pred: np.ndarray) -> pd.DataFrame:
+    """v32 PREDICTION-DISTRIBUTION SHIFT (IDEAS_ZOO v65 §43, observation):
+    moments + tail mass of the working-region blend vs the shipped test
+    prediction, both z-scored by the WORKING distribution -- test predictions
+    far more extreme than anything validation ever scored = amplitude risk."""
+    a = np.asarray(blend_oof, np.float64)
+    b = np.asarray(test_pred, np.float64)
+    mu, sd = a.mean(), a.std() + 1e-12
+    az, bz = (a - mu) / sd, (b - mu) / sd
+    def stats(v):
+        return {"mean_z": round(float(v.mean()), 4), "std_z": round(float(v.std()), 4),
+                "skew": round(float(((v - v.mean()) ** 3).mean() / (v.std() + 1e-12) ** 3), 4),
+                "kurt": round(float(((v - v.mean()) ** 4).mean() / (v.std() + 1e-12) ** 4), 4),
+                "q01": round(float(np.quantile(v, 0.01)), 4), "q99": round(float(np.quantile(v, 0.99)), 4),
+                "tail_mass_3sd": round(float(np.mean(np.abs(v) > 3.0)), 5)}
+    rows = [{"distribution": "working_blend_oof", **stats(az)},
+            {"distribution": "test_prediction", **stats(bz)}]
+    return pd.DataFrame(rows)
