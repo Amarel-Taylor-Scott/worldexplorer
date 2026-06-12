@@ -976,7 +976,7 @@ import warnings
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, asdict, replace, field
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, NamedTuple
 
 import numpy as np
 import pandas as pd
