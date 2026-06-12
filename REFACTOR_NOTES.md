@@ -1,40 +1,80 @@
 # Refactor notes — manageability roadmap
 
 The engine is rebuilt by concatenating `engine_src/*.py` in **filename order** into
-`worldexplorer/_engine.py` (see `sync_engine.py`). So any split must be byte‑preserving
-to be provably behavior‑neutral.
+`worldexplorer/_engine.py` (see `sync_engine.py`). Workflow: edit `engine_src/` →
+`python sync_engine.py` → gate → commit.
 
-## Done (byte‑preserving, zero behavior change)
-`split_module.py` cuts a module at top‑level AST boundaries into ordered `__NN`
-sub‑files; concatenation is byte‑identical (verified by `diff` against the prior
-`_engine.py`). 18 → 26 modules:
+## Gates (run them for ANY engine change)
 
-| was | now |
-|---|---|
-| `06_viewports.py` (1056) | `__00` rank caches/helpers · `__01` family rankers (`_ranked_for`) · `__02` `build_viewport` + transforms |
-| `07_skills.py` (1031) | `__00` registry + lane/gpu helpers · `__01` `fit_skill` · `__02` predict |
-| `12_topography_reports.py` (392) | `__00` · `__01` |
-| `13_ensemble.py` (390) | `__00` · `__01` |
-| `15_…forensic….py` (837) | `__00` governor+ledger+court · `__01` robust selector · `__02` forensic orchestrator |
+- `python tools/check_units.py --check worldexplorer/_engine.py <goldens.json>` —
+  83 per-branch golden fingerprints: every skill kind (fit+predict), every ranker
+  family, every transform, on a fixed synthetic fixture. Catches per-branch breakage
+  the e2e smoke can't see. Capture goldens from a known-good engine with `--save`.
+- `python tools/check_equivalence.py --check worldexplorer/_engine.py <baseline.json>` —
+  end-to-end tiny-synthetic run; asserts the SHIPPED DECISION (winner / members /
+  weights / selector / sealed / forward) matches. `--save` to capture, or
+  `<engineA.py> <engineB.py>` for a full A/B. Both gates verified deterministic
+  (double-run identical) before first use.
 
-## The two TRUE monoliths — single AST nodes, need a STRUCTURAL refactor (not a byte split)
-Each is one giant construct, so it can't be byte‑split. Decompose in small commits,
-**each gated by a smoke run** (the synthetic‑seed decision must stay identical; no
-byte‑identity is possible once structure changes).
+Baselines for the 2026-06 refactor live in `/tmp/wx_gate/` (recapture anytime from
+a committed engine via `git show <rev>:worldexplorer/_engine.py`).
 
-### 1. `fit_skill` (~600 lines, ~28 `if kind == …` branches) → a `SKILLS` registry
-- `_FIT: dict[str, callable] = {}`; extract each branch to `def _fit_<kind>(Z, y_tr, in_tr, in_va, state, ctx) -> state`, where `ctx` bundles the shared inputs `(X_tr, seg_tr, cols, idx, transform, rng, cfg, seed, spec)`.
-- `fit_skill` becomes: build viewport → `Z` → inner split → `return _FIT[kind](Z, y_tr, in_tr, in_va, state, ctx)`.
-- Mirror `_predict_core` → `_PREDICT`. Adding a skill = one small function + one registry line (not a 3‑place edit).
+## Done — byte-preserving splits (zero behavior change)
 
-### 2. `ExplorerHarness.run` (1481 lines, one method) → phase methods on a `RunState`
-- A `RunState` carries cross‑phase locals (`cfg, library, X_full/y_full/seg_full, Xp/yp/segp, ATLAS/GAUGE, members, weights, …`).
-- `run()` → slim orchestrator: `_setup → _load_data → _build_atlas → _pre_scans → _phase1_explore → _raid1 → _phase2_evolve → _raid2 → _ablation_dive → _select_members → _ensemble → _forward_gate → _governor → _forensics → _shipping_court → _shrink_chorus_shape → _sealed_audit → _final_refit_submit → _reports_cairn_ledger → _summary`.
-- Each extraction is its own commit + smoke. Afterwards the phase methods can move into mixin files (`16a_…`, `16b_…`), each individually valid.
+`split_module.py` cuts a module at top-level AST boundaries into ordered `__NN`
+sub-files; concatenation proved byte-identical by `diff`. 18 → 26 modules (see
+git history for the table).
 
-### Also (same registry pattern)
-`_ranked_for` (24‑branch family dispatch) → `RANKERS`; `build_viewport` transforms → `TRANSFORMS`.
+## Done — structural refactors (2026-06-11, all decision-identical via both gates)
+
+### 1. `fit_skill` / `_predict_core` → `_FIT` / `_PREDICT` registries
+`engine_src/07_skills__01.py`: each of the 32 `if kind == …` fit branches is now
+`_fit_<kind>(Z, y_tr, in_tr, in_va, state, ctx)` with a `FitCtx` NamedTuple
+(spec, X_tr, seg_tr, cols, rng, cfg, seed); `fit_skill` = build viewport → Z →
+inner split → `_FIT[kind](…)`. `07_skills__02.py`: `_PREDICT` registry with
+`_predict_default` (= plain `state["model"].predict`) as the fall-through.
+**Adding a skill** = one `_fit_*` fn + `_FIT` row + `SKILL_REGISTRY` row
+(+ `_PREDICT` row only if predict isn't the default).
+
+### 2. `_ranked_for` → `RANKERS`; `build_viewport` transforms → `TRANSFORMS`
+`engine_src/06_viewports__01.py`: 20-family elif chain → `RANKERS` registry
+(`_rank_<family>(spec, X_tr, y_tr, seg_tr, pool, sig)`), corr-ranking default;
+cache + red-pheromone/trap post-pass stay in `_ranked_for`.
+`engine_src/06_viewports__02.py`: `TRANSFORMS` = name → `(setup, apply)`;
+setup returns fitted params (None = identity fall-through, matching the old
+chain), pure transforms have `setup=None`; only the ACTIVE transform's setup
+runs, so rng draw order is unchanged. **Adding a family/transform** = one or two
+functions + one registry row.
+
+### 3. `ExplorerHarness.run` (1651-line method) → `_RunState` + 26 phase methods
+Two mechanical, individually-gated passes:
+- **Pass A** (`tools/method_object_rewrite.py`): symtable-exact rewrite of all
+  296 run-locals to `rs.<name>` attributes (2097 references; CPython scope rules
+  honored incl. comprehension first-iter; inner defs exported onto `rs`; the one
+  `nonlocal` dropped; `except` binders kept local; every edit substring-verified
+  + missed-rewrite resolver check).
+- **Pass B** (`tools/split_run_phases.py`): byte-exact slice of the body into
+  phase methods at the section-comment boundaries; splitter verifies reassembly
+  and that every phase assigning a module global declares it.
+
+`run()` is now: `_setup → _load_data → _quarantine_probe → _build_atlas →
+_beacons → _pre_scans → _phase1_explore → _raid1 → _phase2_evolve → _raid2 →
+_ablation_dive → _trail_reports → _select_members → _ensemble →
+_forward_holdout → _governor → _forensics → _forward_gate → _shipping_court →
+_shrink_chorus_shape → _health_alarms → _sealed_audit → _final_refit_submit →
+_cairn_ledger → _chronicle → _summarize` (returns `rs.summary`).
+
+## Optional follow-ups (not blocking anything)
+
+- Move groups of phase methods into mixin files (`16a_…`, `16b_…` before
+  `16_harness.py`, `class ExplorerHarness(_PhasesA, _PhasesB)`): only worth it
+  if 16_harness.py keeps growing; the monolith problem itself is solved.
+- Inert `global ATLAS, GAUGE` line at the top of `_setup` (its assignments
+  moved to `_build_atlas`, which has its own declaration) — cosmetic.
+- P4 from the v26 roadmap (consolidate the layered shipping overrides into the
+  robust selector as the single shipping authority) is a BEHAVIOR change —
+  deliberately not part of this behavior-preserving refactor.
 
 ## Source of truth
-`worldexplorer/engine_src/` is now **the** source. `kaggle/drw_world_explorer_v26/src/` is a
-frozen R&D snapshot. Workflow: edit `engine_src/` → `python sync_engine.py` → validate → commit.
+`worldexplorer/engine_src/` is **the** source. `kaggle/drw_world_explorer_v26/src/`
+is a frozen R&D snapshot.
