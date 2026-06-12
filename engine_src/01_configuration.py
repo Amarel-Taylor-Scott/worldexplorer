@@ -354,6 +354,16 @@ class HarnessConfig:
     PLSRANK_POOL: int = 192            # pre-screen to top-N by |corr| before the PLS fit (cost guard)
     PLSRANK_COMPONENTS: int = 8        # PLS components for the selector fit
 
+    # v30 INITIAL WIDE-PATH BIAS (user-directed): the search currency's WIDTH
+    # share starts high and ANNEALS (half-life in lessons) back to the v4 0.5
+    # balance -- early exploration prefers WIDE robust trails (high lower-bound
+    # strength) over narrow lucky ridgelines, and the run's own measured
+    # evidence takes over as lessons accumulate. 0.5 = exact no-op (the
+    # historical fitness); the run also MEASURES corr(width, decay) so the
+    # ledger can recalibrate this prior from real evidence.
+    WIDTH_BIAS_START: float = 0.8      # initial width share of the search currency (0.5 = off)
+    WIDTH_BIAS_HALFLIFE: int = 60      # lessons until the extra width bias halves
+
     # v21 FORENSIC REGIME-SCIENCE layer (self-tuning, forward-validated, no-op-safe).
     # Motivated by the v12 monoculture regression: an 8/8 single-family blend
     # looked great in-regime and decayed out-of-regime, invisible to every

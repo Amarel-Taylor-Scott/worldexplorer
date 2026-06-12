@@ -47,10 +47,34 @@ class Lesson:
     surprise: float = float("nan")      # |predicted width - measured width| (set by the library)
 
 
+# v30: the wide-path annealing clock -- lessons measured so far this run
+# (reset by the harness at run start; advanced by SharedLibrary.add).
+WIDTH_BIAS = {"n": 0}
+
+
+def width_share() -> float:
+    """v30: the search currency's WIDTH share. Starts at WIDTH_BIAS_START
+    (initial bias toward WIDE paths -- robust lower-bound strength over raw
+    corr) and anneals with a half-life in LESSONS toward the v4 0.5 balance.
+    0.5 = exact historical no-op; the bias shapes the EARLY trajectory only."""
+    start = float(getattr(CFG, "WIDTH_BIAS_START", 0.5))
+    hl = max(1.0, float(getattr(CFG, "WIDTH_BIAS_HALFLIFE", 60)))
+    return 0.5 + (start - 0.5) * (0.5 ** (WIDTH_BIAS["n"] / hl))
+
+
+def width_bias_beta() -> float:
+    """The bandit-side blend strength implied by width_share: 0 at the
+    historical 0.5 balance (exact no-op), 1 at a pure-width currency."""
+    return max(0.0, min(1.0, 2.0 * (width_share() - 0.5)))
+
+
 def lesson_fitness(l: Lesson) -> float:
-    """v4 fitness: honest signal AND the weaker geometry's robustness."""
+    """v4 fitness: honest signal AND the weaker geometry's robustness.
+    v30: the width share anneals from WIDTH_BIAS_START -> 0.5 (initial
+    wide-path bias; 0.5 reproduces the historical 50/50 exactly)."""
     wf_w = l.wf_width if np.isfinite(l.wf_width) else l.width
-    return 0.5 * l.oof_corr + 0.5 * min(l.width, wf_w)
+    ww = width_share()
+    return (1.0 - ww) * l.oof_corr + ww * min(l.width, wf_w)
 
 
 def run_lesson(explorer: str, stage: str, skill: str, spec: ViewportSpec,
@@ -229,6 +253,7 @@ class SharedLibrary:
     def __init__(self) -> None:
         self.lessons: list[Lesson] = []
         self.gain_by_key: dict[str, list[float]] = {}
+        self.width_by_key: dict[str, list[float]] = {}   # v30: robust-width per key (wide-path bias)
         self.runs: dict[str, int] = {}
         self.surprise_ema: dict[str, float] = {}    # v10 predictive-coding residuals
 
@@ -254,6 +279,10 @@ class SharedLibrary:
                 self.surprise_ema[c] = 0.7 * prev + 0.3 * lesson.surprise
         self.lessons.append(lesson)
         self.gain_by_key.setdefault(lesson.key, []).append(lesson.oof_corr)
+        wf_w = lesson.wf_width if np.isfinite(lesson.wf_width) else lesson.width
+        self.width_by_key.setdefault(lesson.key, []).append(
+            float(min(lesson.width, wf_w)) if np.isfinite(lesson.width) else 0.0)
+        WIDTH_BIAS["n"] += 1                        # v30: advance the wide-path annealing clock
         self.runs[lesson.key] = self.runs.get(lesson.key, 0) + 1
         if lesson.decision == "promote" and lesson.oof_corr > 0:
             # stigmergy: deposit pheromone on the columns this trail used
@@ -277,6 +306,15 @@ class SharedLibrary:
 
     def family_gain(self, family: str) -> float:
         v = [l.oof_corr for l in self.lessons if l.family == family]
+        return float(np.mean(v)) if v else 0.0
+
+    def mean_width(self, key: str) -> float:
+        v = self.width_by_key.get(key, [])
+        return float(np.mean(v)) if v else 0.0
+
+    def family_width(self, family: str) -> float:
+        v = [min(l.width, l.wf_width if np.isfinite(l.wf_width) else l.width)
+             for l in self.lessons if l.family == family and np.isfinite(l.width)]
         return float(np.mean(v)) if v else 0.0
 
     def oofs(self) -> dict[str, np.ndarray]:

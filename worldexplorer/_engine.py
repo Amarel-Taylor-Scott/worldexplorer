@@ -1449,6 +1449,16 @@ class HarnessConfig:
     PLSRANK_POOL: int = 192            # pre-screen to top-N by |corr| before the PLS fit (cost guard)
     PLSRANK_COMPONENTS: int = 8        # PLS components for the selector fit
 
+    # v30 INITIAL WIDE-PATH BIAS (user-directed): the search currency's WIDTH
+    # share starts high and ANNEALS (half-life in lessons) back to the v4 0.5
+    # balance -- early exploration prefers WIDE robust trails (high lower-bound
+    # strength) over narrow lucky ridgelines, and the run's own measured
+    # evidence takes over as lessons accumulate. 0.5 = exact no-op (the
+    # historical fitness); the run also MEASURES corr(width, decay) so the
+    # ledger can recalibrate this prior from real evidence.
+    WIDTH_BIAS_START: float = 0.8      # initial width share of the search currency (0.5 = off)
+    WIDTH_BIAS_HALFLIFE: int = 60      # lessons until the extra width bias halves
+
     # v21 FORENSIC REGIME-SCIENCE layer (self-tuning, forward-validated, no-op-safe).
     # Motivated by the v12 monoculture regression: an 8/8 single-family blend
     # looked great in-regime and decayed out-of-regime, invisible to every
@@ -4502,10 +4512,34 @@ class Lesson:
     surprise: float = float("nan")      # |predicted width - measured width| (set by the library)
 
 
+# v30: the wide-path annealing clock -- lessons measured so far this run
+# (reset by the harness at run start; advanced by SharedLibrary.add).
+WIDTH_BIAS = {"n": 0}
+
+
+def width_share() -> float:
+    """v30: the search currency's WIDTH share. Starts at WIDTH_BIAS_START
+    (initial bias toward WIDE paths -- robust lower-bound strength over raw
+    corr) and anneals with a half-life in LESSONS toward the v4 0.5 balance.
+    0.5 = exact historical no-op; the bias shapes the EARLY trajectory only."""
+    start = float(getattr(CFG, "WIDTH_BIAS_START", 0.5))
+    hl = max(1.0, float(getattr(CFG, "WIDTH_BIAS_HALFLIFE", 60)))
+    return 0.5 + (start - 0.5) * (0.5 ** (WIDTH_BIAS["n"] / hl))
+
+
+def width_bias_beta() -> float:
+    """The bandit-side blend strength implied by width_share: 0 at the
+    historical 0.5 balance (exact no-op), 1 at a pure-width currency."""
+    return max(0.0, min(1.0, 2.0 * (width_share() - 0.5)))
+
+
 def lesson_fitness(l: Lesson) -> float:
-    """v4 fitness: honest signal AND the weaker geometry's robustness."""
+    """v4 fitness: honest signal AND the weaker geometry's robustness.
+    v30: the width share anneals from WIDTH_BIAS_START -> 0.5 (initial
+    wide-path bias; 0.5 reproduces the historical 50/50 exactly)."""
     wf_w = l.wf_width if np.isfinite(l.wf_width) else l.width
-    return 0.5 * l.oof_corr + 0.5 * min(l.width, wf_w)
+    ww = width_share()
+    return (1.0 - ww) * l.oof_corr + ww * min(l.width, wf_w)
 
 
 def run_lesson(explorer: str, stage: str, skill: str, spec: ViewportSpec,
@@ -4684,6 +4718,7 @@ class SharedLibrary:
     def __init__(self) -> None:
         self.lessons: list[Lesson] = []
         self.gain_by_key: dict[str, list[float]] = {}
+        self.width_by_key: dict[str, list[float]] = {}   # v30: robust-width per key (wide-path bias)
         self.runs: dict[str, int] = {}
         self.surprise_ema: dict[str, float] = {}    # v10 predictive-coding residuals
 
@@ -4709,6 +4744,10 @@ class SharedLibrary:
                 self.surprise_ema[c] = 0.7 * prev + 0.3 * lesson.surprise
         self.lessons.append(lesson)
         self.gain_by_key.setdefault(lesson.key, []).append(lesson.oof_corr)
+        wf_w = lesson.wf_width if np.isfinite(lesson.wf_width) else lesson.width
+        self.width_by_key.setdefault(lesson.key, []).append(
+            float(min(lesson.width, wf_w)) if np.isfinite(lesson.width) else 0.0)
+        WIDTH_BIAS["n"] += 1                        # v30: advance the wide-path annealing clock
         self.runs[lesson.key] = self.runs.get(lesson.key, 0) + 1
         if lesson.decision == "promote" and lesson.oof_corr > 0:
             # stigmergy: deposit pheromone on the columns this trail used
@@ -4732,6 +4771,15 @@ class SharedLibrary:
 
     def family_gain(self, family: str) -> float:
         v = [l.oof_corr for l in self.lessons if l.family == family]
+        return float(np.mean(v)) if v else 0.0
+
+    def mean_width(self, key: str) -> float:
+        v = self.width_by_key.get(key, [])
+        return float(np.mean(v)) if v else 0.0
+
+    def family_width(self, family: str) -> float:
+        v = [min(l.width, l.wf_width if np.isfinite(l.wf_width) else l.width)
+             for l in self.lessons if l.family == family and np.isfinite(l.width)]
         return float(np.mean(v)) if v else 0.0
 
     def oofs(self) -> dict[str, np.ndarray]:
@@ -4979,7 +5027,14 @@ class Explorer:
             if SURVEY:
                 # v10 satellite map: families where orbit saw signal get lift
                 prior += 0.01 * SURVEY.get(spec.family, 0.0) / (max(SURVEY.values()) + 1e-9)
-            social = self.traits["sociality"] * max(library.mean_gain(key), library.family_gain(spec.family))
+            social_gain = max(library.mean_gain(key), library.family_gain(spec.family))
+            wb = width_bias_beta()
+            if wb > 0.0:
+                # v30 initial wide-path bias: the early social signal listens to
+                # WIDTH (robust lower-bound strength); anneals to pure corr-gain
+                social_gain = (1.0 - wb) * social_gain + wb * max(
+                    library.mean_width(key), library.family_width(spec.family))
+            social = self.traits["sociality"] * social_gain
             explore = (0.5 + self.traits["curiosity"]) * self.cfg.UCB_C * math.sqrt(
                 math.log(total + 1) / (library.runs.get(key, 0) + 1))
             # v10 surprise curiosity: attention flows where the map is wrong
@@ -7414,6 +7469,7 @@ class ExplorerHarness:
         GENE_POOL.clear()                # fresh plasmid pool (v11)
         RED_MYCELIUM.clear()             # fresh repellent channel (v14)
         GOVERNOR.clear()                 # v27: fresh runtime complexity-generalization governor
+        WIDTH_BIAS["n"] = 0              # v30: fresh wide-path annealing clock
         LEDGER_PRIOR.clear()             # v27: fresh cross-run learning ledger (repopulated from prior cairn below)
         global FCLUST, HABITAT
         FCLUST = None; HABITAT = None; QUARANTINE.clear()   # fresh forensic sensors (v21)
@@ -8585,15 +8641,35 @@ class ExplorerHarness:
                 log("governor_beta_blend", measured=round(rs.gov_beta_meas, 4), prior=round(rs.pb, 4),
                     blended=round(rs.gov_beta, 4), prior_runs=int(LEDGER_PRIOR["governor"].get("count", 0)))
             GOVERNOR.update({"lambda": rs.gov_lambda, "beta": rs.gov_beta, "complexity": rs.gov_cmap})
+            # v30: MEASURE the wide-path hypothesis -- does a trail's WIDTH (robust
+            # lower-bound strength) predict LOWER out-of-period decay on THIS
+            # dataset? Negative corr = wide paths decay less = the initial bias is
+            # justified; the ledger carries it so the next run can recalibrate
+            # WIDTH_BIAS_START from accumulated evidence instead of a prior.
+            rs.width_decay_corr = None
+            wd = [(float(min(l.width, l.wf_width if np.isfinite(l.wf_width) else l.width)),
+                   float(l.oof_corr - l.wf_corr))
+                  for l in rs.library.lessons
+                  if l.oof_corr > 0.02 and np.isfinite(l.wf_corr) and np.isfinite(l.width)]
+            if len(wd) >= rs.cfg.GOV_MIN_LESSONS:
+                rs.width_decay_corr = float(pearson(
+                    np.array([a for a, _ in wd], np.float64),
+                    np.array([b for _, b in wd], np.float64)))
             write_json({"beta_decay_vs_complexity": round(rs.gov_beta, 5),
                         "lambda_penalty": round(rs.gov_lambda, 5),
                         "lessons_measured": len(rs.gov_pts),
+                        "width_decay_corr": (round(rs.width_decay_corr, 5)
+                                             if rs.width_decay_corr is not None else None),
+                        "width_share_now": round(width_share(), 4),
                         "member_complexity": {nm: round(c, 4) for nm, c in rs.gov_cmap.items()},
                         "note": "lambda * config-complexity is subtracted from each candidate's robust score; "
-                                "beta>0 => this dataset punishes capacity (ship simpler); beta<=0 => capacity free"},
+                                "beta>0 => this dataset punishes capacity (ship simpler); beta<=0 => capacity free; "
+                                "width_decay_corr<0 => wide paths decay less (the v30 initial bias is justified)"},
                        "complexity_governor.json")
             log("complexity_governor", beta=round(rs.gov_beta, 4), lam=round(rs.gov_lambda, 4),
                 lessons=len(rs.gov_pts),
+                width_decay_corr=(round(rs.width_decay_corr, 4)
+                                  if rs.width_decay_corr is not None else None),
                 note="shipping-complexity penalty set by the measured decay~complexity slope (runtime-adaptive)")
 
 
@@ -8851,7 +8927,7 @@ class ExplorerHarness:
             rs.seed_bank.append(rs.l.key)
             if len(rs.seed_bank) >= rs.cfg.SEEDBANK_SIZE:
                 break
-        rs.cairn = {"version": "v29", "data_source": rs.data_source,
+        rs.cairn = {"version": "v30", "data_source": rs.data_source,
                  "gauge_edges": [float(e) for e in (GAUGE.edges if GAUGE is not None else [])],
                  "terrain_populations": rs.t_pop, "weather_populations": rs.w_pop,
                  "even_dominant": rs.n_even, "trap_count": len(TRAPS),
@@ -8873,9 +8949,12 @@ class ExplorerHarness:
                           key=lambda l: -(l.oof_corr - l.wf_corr))
             rs.decayers = list(dict.fromkeys(f"{l.skill}|{l.family}" for l in rs.decj))[: rs.cfg.LEDGER_MAX_DECAYERS]
             rs.gcount = int((rs.prev_led.get("governor") or {}).get("count", 0)) + 1
-            rs.ledger = {"version": "v29", "data_source": rs.data_source,
+            rs.ledger = {"version": "v30", "data_source": rs.data_source,
                       "governor": {"beta": round(float(GOVERNOR.get("beta", 0.0)), 5),
                                    "lambda": round(float(GOVERNOR.get("lambda", 0.0)), 5),
+                                   "width_decay_corr": (round(rs.width_decay_corr, 5)
+                                                        if getattr(rs, "width_decay_corr", None) is not None
+                                                        else None),   # v30: wide-path evidence for the next run
                                    "count": rs.gcount},
                       "family_decay": _ledger_merge(rs.prev_led.get("family_decay", {}),
                                                     _ledger_decay_stats(rs.library.lessons, "family")),
@@ -8988,7 +9067,7 @@ class ExplorerHarness:
              "No previous cairn was found; ours now stands."),
         ]
         write_chronicle({
-            "title": f"DRW world-explorer v29 ({rs.data_source})",
+            "title": f"DRW world-explorer v30 ({rs.data_source})",
             "features": len(rs.cols), "train_rows": rs.n, "sealed_rows": int(len(rs.sealed_idx)),
             "data_source": rs.data_source, "terrain_pop": rs.t_pop, "weather_pop": rs.w_pop,
             "even_dominant": rs.n_even, "explorer_lines": rs.explorer_lines,

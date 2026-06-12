@@ -232,7 +232,14 @@ class Explorer:
             if SURVEY:
                 # v10 satellite map: families where orbit saw signal get lift
                 prior += 0.01 * SURVEY.get(spec.family, 0.0) / (max(SURVEY.values()) + 1e-9)
-            social = self.traits["sociality"] * max(library.mean_gain(key), library.family_gain(spec.family))
+            social_gain = max(library.mean_gain(key), library.family_gain(spec.family))
+            wb = width_bias_beta()
+            if wb > 0.0:
+                # v30 initial wide-path bias: the early social signal listens to
+                # WIDTH (robust lower-bound strength); anneals to pure corr-gain
+                social_gain = (1.0 - wb) * social_gain + wb * max(
+                    library.mean_width(key), library.family_width(spec.family))
+            social = self.traits["sociality"] * social_gain
             explore = (0.5 + self.traits["curiosity"]) * self.cfg.UCB_C * math.sqrt(
                 math.log(total + 1) / (library.runs.get(key, 0) + 1))
             # v10 surprise curiosity: attention flows where the map is wrong

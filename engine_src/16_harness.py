@@ -51,6 +51,7 @@ class ExplorerHarness:
         GENE_POOL.clear()                # fresh plasmid pool (v11)
         RED_MYCELIUM.clear()             # fresh repellent channel (v14)
         GOVERNOR.clear()                 # v27: fresh runtime complexity-generalization governor
+        WIDTH_BIAS["n"] = 0              # v30: fresh wide-path annealing clock
         LEDGER_PRIOR.clear()             # v27: fresh cross-run learning ledger (repopulated from prior cairn below)
         global FCLUST, HABITAT
         FCLUST = None; HABITAT = None; QUARANTINE.clear()   # fresh forensic sensors (v21)
@@ -1222,15 +1223,35 @@ class ExplorerHarness:
                 log("governor_beta_blend", measured=round(rs.gov_beta_meas, 4), prior=round(rs.pb, 4),
                     blended=round(rs.gov_beta, 4), prior_runs=int(LEDGER_PRIOR["governor"].get("count", 0)))
             GOVERNOR.update({"lambda": rs.gov_lambda, "beta": rs.gov_beta, "complexity": rs.gov_cmap})
+            # v30: MEASURE the wide-path hypothesis -- does a trail's WIDTH (robust
+            # lower-bound strength) predict LOWER out-of-period decay on THIS
+            # dataset? Negative corr = wide paths decay less = the initial bias is
+            # justified; the ledger carries it so the next run can recalibrate
+            # WIDTH_BIAS_START from accumulated evidence instead of a prior.
+            rs.width_decay_corr = None
+            wd = [(float(min(l.width, l.wf_width if np.isfinite(l.wf_width) else l.width)),
+                   float(l.oof_corr - l.wf_corr))
+                  for l in rs.library.lessons
+                  if l.oof_corr > 0.02 and np.isfinite(l.wf_corr) and np.isfinite(l.width)]
+            if len(wd) >= rs.cfg.GOV_MIN_LESSONS:
+                rs.width_decay_corr = float(pearson(
+                    np.array([a for a, _ in wd], np.float64),
+                    np.array([b for _, b in wd], np.float64)))
             write_json({"beta_decay_vs_complexity": round(rs.gov_beta, 5),
                         "lambda_penalty": round(rs.gov_lambda, 5),
                         "lessons_measured": len(rs.gov_pts),
+                        "width_decay_corr": (round(rs.width_decay_corr, 5)
+                                             if rs.width_decay_corr is not None else None),
+                        "width_share_now": round(width_share(), 4),
                         "member_complexity": {nm: round(c, 4) for nm, c in rs.gov_cmap.items()},
                         "note": "lambda * config-complexity is subtracted from each candidate's robust score; "
-                                "beta>0 => this dataset punishes capacity (ship simpler); beta<=0 => capacity free"},
+                                "beta>0 => this dataset punishes capacity (ship simpler); beta<=0 => capacity free; "
+                                "width_decay_corr<0 => wide paths decay less (the v30 initial bias is justified)"},
                        "complexity_governor.json")
             log("complexity_governor", beta=round(rs.gov_beta, 4), lam=round(rs.gov_lambda, 4),
                 lessons=len(rs.gov_pts),
+                width_decay_corr=(round(rs.width_decay_corr, 4)
+                                  if rs.width_decay_corr is not None else None),
                 note="shipping-complexity penalty set by the measured decay~complexity slope (runtime-adaptive)")
 
 
@@ -1488,7 +1509,7 @@ class ExplorerHarness:
             rs.seed_bank.append(rs.l.key)
             if len(rs.seed_bank) >= rs.cfg.SEEDBANK_SIZE:
                 break
-        rs.cairn = {"version": "v29", "data_source": rs.data_source,
+        rs.cairn = {"version": "v30", "data_source": rs.data_source,
                  "gauge_edges": [float(e) for e in (GAUGE.edges if GAUGE is not None else [])],
                  "terrain_populations": rs.t_pop, "weather_populations": rs.w_pop,
                  "even_dominant": rs.n_even, "trap_count": len(TRAPS),
@@ -1510,9 +1531,12 @@ class ExplorerHarness:
                           key=lambda l: -(l.oof_corr - l.wf_corr))
             rs.decayers = list(dict.fromkeys(f"{l.skill}|{l.family}" for l in rs.decj))[: rs.cfg.LEDGER_MAX_DECAYERS]
             rs.gcount = int((rs.prev_led.get("governor") or {}).get("count", 0)) + 1
-            rs.ledger = {"version": "v29", "data_source": rs.data_source,
+            rs.ledger = {"version": "v30", "data_source": rs.data_source,
                       "governor": {"beta": round(float(GOVERNOR.get("beta", 0.0)), 5),
                                    "lambda": round(float(GOVERNOR.get("lambda", 0.0)), 5),
+                                   "width_decay_corr": (round(rs.width_decay_corr, 5)
+                                                        if getattr(rs, "width_decay_corr", None) is not None
+                                                        else None),   # v30: wide-path evidence for the next run
                                    "count": rs.gcount},
                       "family_decay": _ledger_merge(rs.prev_led.get("family_decay", {}),
                                                     _ledger_decay_stats(rs.library.lessons, "family")),
@@ -1625,7 +1649,7 @@ class ExplorerHarness:
              "No previous cairn was found; ours now stands."),
         ]
         write_chronicle({
-            "title": f"DRW world-explorer v29 ({rs.data_source})",
+            "title": f"DRW world-explorer v30 ({rs.data_source})",
             "features": len(rs.cols), "train_rows": rs.n, "sealed_rows": int(len(rs.sealed_idx)),
             "data_source": rs.data_source, "terrain_pop": rs.t_pop, "weather_pop": rs.w_pop,
             "even_dominant": rs.n_even, "explorer_lines": rs.explorer_lines,
