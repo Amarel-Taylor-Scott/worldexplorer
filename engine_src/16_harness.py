@@ -407,6 +407,42 @@ class ExplorerHarness:
 
 
     def _pre_scans(self, rs: "_RunState") -> None:
+        # ---- v35 FEATURE TOPOLOGY + TRAIN->TEST SHIFT (target-free, X only) ----
+        # Built BEFORE the satellite survey so the consensus / testlike_stable
+        # ranker families have their substrate when first surveyed. y never
+        # touches the graph or the shift; both are leak-free everywhere.
+        global FEATURE_GRAPH, FEATURE_SHIFT
+        FEATURE_GRAPH = None
+        FEATURE_SHIFT = None
+        if rs.cfg.FEATURE_TOPOLOGY:
+            try:
+                FEATURE_GRAPH = FeatureGraph(rs.cfg.FEATURE_GRAPH_CORR, rs.cfg.FEATURE_GRAPH_MAX,
+                                             rs.cfg.SEED).fit(rs.Xp, rs.cols)
+                log("feature_topology_built", communities=int(FEATURE_GRAPH.n_communities),
+                    clustered=int((FEATURE_GRAPH.community >= 0).sum()),
+                    note="target-free feature-feature communities (common-topology groups)")
+            except Exception as e:
+                FEATURE_GRAPH = None
+                log("feature_topology_skipped", err=str(e)[:80])
+        if rs.cfg.TESTLIKE_FEATURE_GATE:
+            try:
+                FEATURE_SHIFT = fit_feature_shift(rs.X_full[:rs.n_work], rs.X_test, rs.cfg)
+                log("feature_shift_built", features=int(len(FEATURE_SHIFT)),
+                    q50=round(float(np.quantile(FEATURE_SHIFT, 0.5)), 4),
+                    q90=round(float(np.quantile(FEATURE_SHIFT, 0.9)), 4),
+                    high_shift=int((FEATURE_SHIFT >= np.quantile(FEATURE_SHIFT, 0.9)).sum()),
+                    note="per-feature train->test shift (X only); testlike_stable demotes high-shift features")
+            except Exception as e:
+                FEATURE_SHIFT = None
+                log("feature_shift_skipped", err=str(e)[:80])
+        if FEATURE_GRAPH is not None:
+            try:
+                rs.topo_df = feature_topology_report(FEATURE_GRAPH, FEATURE_SHIFT, rs.cols, rs.Xp, rs.yp)
+                if not rs.topo_df.empty:
+                    write_csv(rs.topo_df, "feature_topology_report.csv")
+            except Exception as e:
+                log("feature_topology_report_skipped", err=str(e)[:80])
+
         # ---- SYMMETRY FIELD: even-vs-odd response of the strongest features ---
         rs.sym_df = symmetry_field_report(rs.Xp, rs.yp, rs.cols)
         write_csv(rs.sym_df, "symmetry_field_report.csv")
@@ -1266,6 +1302,22 @@ class ExplorerHarness:
         except Exception as e:
             log("segment_senate_skipped", err=str(e)[:80])
 
+        # ---- v35 ANTI-FRAGILITY map (observation): which members carry strong
+        # stable meaning that holds under stress (worst-world floor + stability +
+        # perturbation). The map the user asked to see + steer by; gates nothing.
+        try:
+            if rs.cfg.ANTIFRAGILITY_REPORT:
+                af_df = antifragility_report(rs.members, rs.member_lessons, rs.yp, rs.segp,
+                                             rs.terr_p, rs.wth_p, rs.cfg)
+                if not af_df.empty:
+                    write_csv(af_df, "antifragility_report.csv")
+                    log("antifragility", members=len(af_df),
+                        most_antifragile=str(af_df.iloc[0]["member"]),
+                        top_score=round(float(af_df.iloc[0]["antifragility"]), 4),
+                        note="worst-world floor + stability + perturbation; high = survives a shifting world")
+        except Exception as e:
+            log("antifragility_skipped", err=str(e)[:80])
+
 
     def _forward_holdout(self, rs: "_RunState") -> None:
         # ---- forward-drift check + forward gate (within WORKING region) --------
@@ -1677,7 +1729,7 @@ class ExplorerHarness:
             rs.seed_bank.append(rs.l.key)
             if len(rs.seed_bank) >= rs.cfg.SEEDBANK_SIZE:
                 break
-        rs.cairn = {"version": "v34", "data_source": rs.data_source,
+        rs.cairn = {"version": "v35", "data_source": rs.data_source,
                  "gauge_edges": [float(e) for e in (GAUGE.edges if GAUGE is not None else [])],
                  "terrain_populations": rs.t_pop, "weather_populations": rs.w_pop,
                  "even_dominant": rs.n_even, "trap_count": len(TRAPS),
@@ -1699,7 +1751,7 @@ class ExplorerHarness:
                           key=lambda l: -(l.oof_corr - l.wf_corr))
             rs.decayers = list(dict.fromkeys(f"{l.skill}|{l.family}" for l in rs.decj))[: rs.cfg.LEDGER_MAX_DECAYERS]
             rs.gcount = int((rs.prev_led.get("governor") or {}).get("count", 0)) + 1
-            rs.ledger = {"version": "v34", "data_source": rs.data_source,
+            rs.ledger = {"version": "v35", "data_source": rs.data_source,
                       "governor": {"beta": round(float(GOVERNOR.get("beta", 0.0)), 5),
                                    "lambda": round(float(GOVERNOR.get("lambda", 0.0)), 5),
                                    "width_decay_corr": (round(rs.width_decay_corr, 5)
@@ -1817,7 +1869,7 @@ class ExplorerHarness:
              "No previous cairn was found; ours now stands."),
         ]
         write_chronicle({
-            "title": f"DRW world-explorer v34 ({rs.data_source})",
+            "title": f"DRW world-explorer v35 ({rs.data_source})",
             "features": len(rs.cols), "train_rows": rs.n, "sealed_rows": int(len(rs.sealed_idx)),
             "data_source": rs.data_source, "terrain_pop": rs.t_pop, "weather_pop": rs.w_pop,
             "even_dominant": rs.n_even, "explorer_lines": rs.explorer_lines,

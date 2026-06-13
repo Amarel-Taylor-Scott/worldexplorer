@@ -551,6 +551,55 @@ def _rank_room_transition(spec: ViewportSpec, X_tr: np.ndarray, y_tr: np.ndarray
     return [pool[i] for i in np.argsort(-c)]
 
 
+def _rank_testlike_stable(spec: ViewportSpec, X_tr: np.ndarray, y_tr: np.ndarray,
+                          seg_tr: np.ndarray, pool: list[int], sig: tuple) -> list[int]:
+    # v35 TEST-LIKENESS FEATURE GATE -- the marquee out-of-support lever, from
+    # the v33 measurement testlike AUC=1.0 (the DRW test set is feature-DISJOINT
+    # from train). FEATURE_SHIFT (X-only, target-free) says which features move
+    # most between train and test; a coefficient learned on a high-shift feature
+    # extrapolates badly into that disjoint region. Rank by |corr| SOFT-
+    # DOWNWEIGHTED by the normalized shift -- the train/test analog of
+    # sign_stability (which gates time sign-flips). Zero capacity; X only;
+    # degrades to plain corr ranking when no shift vector is available.
+    c = np.abs(corr_vector(X_tr[:, pool], y_tr))
+    if FEATURE_SHIFT is None or len(FEATURE_SHIFT) <= max(pool):
+        return [pool[i] for i in np.argsort(-c)]
+    sh = np.asarray([FEATURE_SHIFT[int(j)] for j in pool], np.float64)
+    sh = sh / (float(sh.max()) + 1e-9)                       # normalize within the pool
+    score = c * (1.0 - CFG.SHIFT_PENALTY * sh)               # soft demotion, never removal
+    return [pool[i] for i in np.argsort(-score)]
+
+
+def _rank_consensus(spec: ViewportSpec, X_tr: np.ndarray, y_tr: np.ndarray,
+                    seg_tr: np.ndarray, pool: list[int], sig: tuple) -> list[int]:
+    # v35 COMMUNITY CONSENSUS -- "finding agreement / relationships between
+    # common-topology features + shared learning across them". A feature whose
+    # signal is CORROBORATED by its target-free topology COMMUNITY (its
+    # neighbours point the same way toward y) is more trustworthy than a lone
+    # correlate that no related feature confirms. Boost |corr| by how strongly
+    # each feature AGREES with its community's directional consensus. The
+    # community STRUCTURE is target-free (FeatureGraph); the agreement is
+    # measured per-fold (fold-honest). Degrades to corr ranking with no graph.
+    c = corr_vector(X_tr[:, pool], y_tr)                     # signed
+    ac = np.abs(c)
+    if (FEATURE_GRAPH is None or FEATURE_GRAPH.community is None
+            or len(FEATURE_GRAPH.community) <= max(pool)):
+        return [pool[i] for i in np.argsort(-ac)]
+    comm = FEATURE_GRAPH.community
+    pc = np.asarray([int(comm[int(j)]) for j in pool], np.int32)
+    score = ac.copy()
+    for cm in np.unique(pc):
+        if cm < 0:
+            continue
+        m = pc == cm
+        if int(m.sum()) >= 2:
+            mean_signed = float(c[m].mean())
+            coher = abs(mean_signed) / (float(np.abs(c[m]).mean()) + 1e-9)   # 0..1 directional consensus
+            agree = (np.sign(c[m]) == np.sign(mean_signed)).astype(np.float64)
+            score[m] = ac[m] * (1.0 + CFG.CONSENSUS_BONUS * coher * agree)
+    return [pool[i] for i in np.argsort(-score)]
+
+
 def _rank_decor_family(spec: ViewportSpec, X_tr: np.ndarray, y_tr: np.ndarray,
                        seg_tr: np.ndarray, pool: list[int], sig: tuple) -> list[int]:
     base_key = (sig, "top")
@@ -583,6 +632,8 @@ RANKERS: dict[str, Callable[..., list[int]]] = {
     "sign_stability": _rank_sign_stability,
     "pls_weight": _rank_pls_weight,
     "room_transition": _rank_room_transition,
+    "testlike_stable": _rank_testlike_stable,
+    "consensus": _rank_consensus,
     "phyllotaxis": _rank_phyllotaxis,
     "compass": _rank_compass,
     "decor": _rank_decor_family,

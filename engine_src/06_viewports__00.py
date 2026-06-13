@@ -18,7 +18,12 @@ FAMILIES = ("top", "anon", "market", "decor", "stable", "medoid", "lastN", "dawn
             "stabsel", "irm") \
     + (("sign_stability",) if CFG.SIGNSTAB_FAMILY else ()) \
     + (("pls_weight",) if CFG.PLSRANK_FAMILY else ()) \
-    + (("room_transition",) if CFG.ROOMTRANS_FAMILY else ())
+    + (("room_transition",) if CFG.ROOMTRANS_FAMILY else ()) \
+    + (("testlike_stable",) if CFG.TESTLIKE_FEATURE_GATE else ()) \
+    + (("consensus",) if CFG.CONSENSUS_FAMILY else ())
+# v35: testlike_stable = downweight train->test shift-driving features (the
+# out-of-support lever from testlike AUC=1.0); consensus = boost features
+# corroborated by their target-free topology community (agreeing meaning)
 # v24: stabsel/irm = bootstrap-L1 stability selection + invariant-risk (slope) selection
 # v28: sign_stability = the 4th-place sign-flip gate as a ranker family (flag-gated)
 # v29: pls_weight = PLS-as-selector (multivariate |coef| ranking; flag-gated)
@@ -335,3 +340,80 @@ def fit_testlike(X_full: np.ndarray, X_test: np.ndarray, n_work: int,
           for q in (0.1, 0.5, 0.9)}
     return scores, {"auc_holdout": round(auc, 4), "cols_used": int(len(cols_idx)),
                     "rows_fit": int(len(ya)), **qs}
+
+
+# v35 FEATURE-TOPOLOGY globals (target-free; reset + fit by the harness each run;
+# read by the consensus / testlike_stable rankers + the topology report).
+FEATURE_GRAPH: "FeatureGraph | None" = None   # the feature-feature topology + communities
+FEATURE_SHIFT: "np.ndarray | None" = None     # per-feature train->test distribution shift (X only)
+
+
+class FeatureGraph:
+    """v35 FEATURE TOPOLOGY ATLAS -- a target-free map of how the FEATURES relate
+    to EACH OTHER (not to y). Builds a feature-feature |corr| graph on a working-
+    X sample and leader-clusters features into COMMUNITIES (topological groups
+    that move together). Leak-free: y never touches it. The dual of the TERRAIN
+    atlas (which clusters ROWS) -- this clusters COLUMNS. Communities let the
+    'consensus' ranker reward features whose signal is CORROBORATED by their
+    neighbours (agreeing meaning, shared learning across related features) and
+    let the topology report see the shape of the feature space."""
+
+    def __init__(self, corr_thresh: float, max_features: int, seed: int) -> None:
+        self.corr_thresh = float(corr_thresh)
+        self.max_features = int(max_features)
+        self.seed = int(seed)
+        self.community: np.ndarray | None = None      # per-feature community id (-1 = unclustered)
+        self.n_communities = 0
+        self.coherence: np.ndarray | None = None      # per-community internal mean |corr|
+
+    def fit(self, X: np.ndarray, cols: list[str]) -> "FeatureGraph":
+        n, d = X.shape
+        comm = np.full(d, -1, np.int32)
+        step = max(1, n // 20000)
+        Xs = X[::step].astype(np.float64)
+        var = Xs.var(0)
+        cand = [int(i) for i in np.argsort(-var)[: min(self.max_features, d)]]   # cluster the loud features
+        if len(cand) >= 2:
+            sub = Xs[:, cand]
+            sub = (sub - sub.mean(0)) / (sub.std(0) + 1e-9)
+            C = np.abs(np.nan_to_num(np.corrcoef(sub, rowvar=False), nan=0.0))
+            np.fill_diagonal(C, 0.0)
+            leaders: list[int] = []                   # leader clustering on the feature graph
+            for i in range(len(cand)):
+                hit = -1
+                for ci, ld in enumerate(leaders):
+                    if C[i, ld] >= self.corr_thresh:
+                        hit = ci
+                        break
+                if hit < 0:
+                    hit = len(leaders)
+                    leaders.append(i)
+                comm[cand[i]] = hit
+            self.n_communities = len(leaders)
+            coher = np.zeros(self.n_communities, np.float64)
+            for ci in range(self.n_communities):
+                mm = [i for i in range(len(cand)) if comm[cand[i]] == ci]
+                if len(mm) >= 2:
+                    coher[ci] = float(C[np.ix_(mm, mm)].sum() / (len(mm) * (len(mm) - 1)))
+            self.coherence = coher
+        self.community = comm
+        return self
+
+
+def fit_feature_shift(X_work: np.ndarray, X_test: np.ndarray, cfg: HarnessConfig) -> np.ndarray:
+    """v35 per-feature TRAIN->TEST shift (X-only, target-free) -- the marquee
+    response to the v33 measurement testlike AUC=1.0 (the test set is feature-
+    DISJOINT from train). Per feature: the standardized mean difference between
+    the working-train and TEST distributions, plus a |log variance ratio| term.
+    High = the feature MOVES between train and test, so a coefficient learned on
+    train extrapolates badly into the disjoint test region. Consumed by the
+    testlike_stable ranker to DOWNWEIGHT shift-driving features -- the train/test
+    analog of sign-stability. Labels and the leaderboard never touch this."""
+    rtr = np.arange(len(X_work))[:: max(1, len(X_work) // int(cfg.TESTLIKE_ROWS))]
+    rte = np.arange(len(X_test))[:: max(1, len(X_test) // int(cfg.TESTLIKE_ROWS))]
+    a = X_work[rtr].astype(np.float64)
+    b = X_test[rte].astype(np.float64)
+    sd = a.std(0) + 1e-9
+    smd = np.abs(b.mean(0) - a.mean(0)) / sd
+    vr = np.abs(np.log((b.var(0) + 1e-9) / (a.var(0) + 1e-9)))
+    return (smd + 0.5 * vr).astype(np.float64)

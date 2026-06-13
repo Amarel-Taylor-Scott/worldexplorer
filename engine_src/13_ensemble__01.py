@@ -213,3 +213,76 @@ def prediction_distribution_report(blend_oof: np.ndarray, test_pred: np.ndarray)
     rows = [{"distribution": "working_blend_oof", **stats(az)},
             {"distribution": "test_prediction", **stats(bz)}]
     return pd.DataFrame(rows)
+
+
+def feature_topology_report(graph, shift, cols, X, y) -> pd.DataFrame:
+    """v35 observation: the FEATURE TOPOLOGY. Per target-free community -- its
+    size, internal coherence (how tightly its features move together), mean/max
+    |corr| to y, its DIRECTIONAL signal consensus (does the community agree on a
+    direction?), and its mean train->test shift. The map of 'common-topology
+    features' that shows WHERE the agreeing, low-shift, stable meaning lives --
+    high coherence + high consensus + LOW shift = a community whose shared signal
+    should survive the disjoint test. Pure observation; gates nothing."""
+    if graph is None or getattr(graph, "community", None) is None:
+        return pd.DataFrame()
+    comm = graph.community
+    step = max(1, len(X) // 20000)
+    Xs, ys = X[::step], y[::step]
+    rows = []
+    for cm in range(int(graph.n_communities)):
+        idx = np.where(comm == cm)[0]
+        if len(idx) == 0:
+            continue
+        c = corr_vector(Xs[:, idx], ys)
+        ac = np.abs(c)
+        mean_signed = float(c.mean())
+        coher = (float(graph.coherence[cm]) if graph.coherence is not None
+                 and cm < len(graph.coherence) else 0.0)
+        consensus = abs(mean_signed) / (float(ac.mean()) + 1e-9)
+        sh = float(np.mean([shift[int(j)] for j in idx])) if shift is not None else float("nan")
+        rows.append({"community": int(cm), "size": int(len(idx)),
+                     "topology_coherence": round(coher, 4),
+                     "mean_abs_corr_y": round(float(ac.mean()), 4),
+                     "max_abs_corr_y": round(float(ac.max()), 4),
+                     "signal_consensus": round(consensus, 4),
+                     "mean_train_test_shift": round(sh, 4) if np.isfinite(sh) else None})
+    return pd.DataFrame(rows).sort_values("mean_abs_corr_y", ascending=False)
+
+
+def antifragility_report(members: dict[str, np.ndarray], member_lessons: dict,
+                         y: np.ndarray, seg: np.ndarray, terr, wth, cfg) -> pd.DataFrame:
+    """v35 observation: the ANTI-FRAGILITY of each candidate member -- not just
+    'does it survive' but how it holds under STRESS. Blends the worst-world corr
+    FLOOR across time/terrain/weather, the consistency gap (mean - worst world),
+    the stability probe (lower RMSE = steadier under input noise), and the
+    predator's perturbation width (positive under a shrunken viewport = robust).
+    High score = strong stable meaning that does NOT break when the world shifts
+    -- the members a high-stability / anti-fragile blend should lean on. Gates
+    nothing here; it is the map the user asked to be able to see + steer by."""
+    worlds = [("seg", seg)]
+    if terr is not None:
+        worlds.append(("terrain", terr))
+    if wth is not None:
+        worlds.append(("weather", wth))
+    rows = []
+    for nm in members:
+        l = member_lessons.get(nm)
+        floors = [pearson(y[ids == s], members[nm][ids == s])
+                  for _, ids in worlds for s in np.unique(ids)
+                  if int((ids == s).sum()) >= cfg.FORENSIC_MIN_WORLD_ROWS]
+        wfloor = float(min(floors)) if floors else 0.0
+        mean_c = float(np.mean(floors)) if floors else 0.0
+        stab = float(l.stability) if (l is not None and np.isfinite(l.stability)) else float("nan")
+        perturb = float(l.perturb_width) if (l is not None and np.isfinite(l.perturb_width)) else float("nan")
+        af = wfloor - 0.5 * max(0.0, mean_c - wfloor)        # reward a high, CONSISTENT floor
+        if np.isfinite(stab):
+            af -= 0.1 * stab                                  # penalize fragility under noise
+        if np.isfinite(perturb):
+            af += 0.5 * max(0.0, perturb)                     # reward holding under perturbation
+        rows.append({"member": nm, "world_floor": round(wfloor, 4),
+                     "mean_world": round(mean_c, 4),
+                     "consistency_gap": round(mean_c - wfloor, 4),
+                     "stability_rmse": round(stab, 4) if np.isfinite(stab) else None,
+                     "perturb_width": round(perturb, 4) if np.isfinite(perturb) else None,
+                     "antifragility": round(af, 4)})
+    return pd.DataFrame(rows).sort_values("antifragility", ascending=False)

@@ -450,6 +450,39 @@ class HarnessConfig:
     # many actually run, so raising TIME_BUDGET_MIN gives the menagerie airtime.
     SENSORY_ROSTER: bool = True
 
+    # v35 FEATURE-TOPOLOGY + AGREEMENT + ANTI-FRAGILITY build (user-directed:
+    # "make the system smarter at the best ensemble + true feature-space
+    # understanding with high stability, anti-fragility, agreeing meaning,
+    # relationships between common-topology features, shared learning"). EVERY
+    # piece is ZERO-CAPACITY -- feature understanding + selection + observation,
+    # never new model capacity (capacity feeds the measured complexity ratchet).
+    # Nothing removed; every piece flag-gated; OFF == v34 exactly.
+    #   * FEATURE_TOPOLOGY: a target-free feature-feature graph -> COMMUNITIES of
+    #     features that move together (the 'common topology features' substrate).
+    #   * TESTLIKE_FEATURE_GATE: the marquee lever from the v33 measurement
+    #     testlike AUC=1.0 (test is feature-DISJOINT from train). An X-only
+    #     per-feature train->test shift vector + a 'testlike_stable' ranker that
+    #     DOWNWEIGHTS shift-driving features (their coefficients extrapolate
+    #     badly into the disjoint test) -- the train/test analog of sign_stability.
+    #   * CONSENSUS_FAMILY: a 'consensus' ranker that boosts features whose
+    #     signal is CORROBORATED by their topology community (agreeing meaning,
+    #     shared learning across related features).
+    #   * CONSENSUS_ENSEMBLE: an 'agreement_weighted' blend strategy -- members
+    #     whose call is independently echoed by the committee earn more weight
+    #     (competes in the honest tournament; ships only if it wins).
+    #   * ANTIFRAGILITY_REPORT: per-member stability + worst-world + perturbation
+    #     map (where the strong stable meaning that survives a shifting world is).
+    FEATURE_TOPOLOGY: bool = True
+    FEATURE_GRAPH_CORR: float = 0.6     # leader-cluster |corr| threshold for feature communities
+    FEATURE_GRAPH_MAX: int = 400        # max features clustered (cost guard; the rest are singletons)
+    TESTLIKE_FEATURE_GATE: bool = True
+    SHIFT_PENALTY: float = 0.5          # soft demotion strength on the normalized per-feature train->test shift
+    CONSENSUS_FAMILY: bool = True
+    CONSENSUS_BONUS: float = 0.5        # |corr| boost per unit of community directional consensus
+    CONSENSUS_ENSEMBLE: bool = True
+    AGREEMENT_POWER: float = 1.0        # exponent on a member's committee-agreement in the agreement blend
+    ANTIFRAGILITY_REPORT: bool = True
+
     # v30.1 WINNER NETWORK (observation only, IDEAS.md 1a): the promoted trails
     # as a graph -- output-corr edges, leader-cluster communities. Feeds the
     # queued network-aware member-selection cap (1b) with measurements first.

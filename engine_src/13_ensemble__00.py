@@ -158,6 +158,30 @@ def parliament_weights(oofs: dict[str, np.ndarray], y: np.ndarray, idx: np.ndarr
     return best_w
 
 
+def agreement_weighted_weights(oofs: dict[str, np.ndarray], y: np.ndarray, idx: np.ndarray,
+                               names: list[str], cfg: HarnessConfig) -> dict[str, float]:
+    """v35 'AGREEING MEANING' blend (user-directed): weight each member by its
+    signal AND by how much its prediction is CORROBORATED by the rest of the
+    committee (mean |corr| to the other members). A member whose call is
+    independently echoed is more trustworthy on a feature-disjoint / out-of-
+    support test than a lone strong-but-unconfirmed one -- agreement is a proxy
+    for the stable shared meaning that survives the shift. Competes in the same
+    honest nested tournament as every other strategy, so it ships ONLY if it
+    actually generalizes (it cannot collapse the blend to a redundant cluster
+    unnoticed -- the outer folds + the viewport-family cap arbitrate)."""
+    if len(names) < 2:
+        return {names[0]: 1.0} if names else {}
+    M = {n: np.asarray(oofs[n][idx], np.float64) for n in names}
+    corr = {n: max(pearson(y[idx], M[n]), 0.0) for n in names}
+    agree = {}
+    for n in names:
+        others = [abs(pearson(M[n], M[m])) for m in names if m != n]
+        agree[n] = float(np.mean(others)) if others else 0.0
+    w = {n: corr[n] * (agree[n] ** float(cfg.AGREEMENT_POWER)) for n in names}
+    s = sum(w.values())
+    return {n: v / s for n, v in w.items()} if s > 0 else {n: 1.0 / len(names) for n in names}
+
+
 def nested_ensemble(oofs: dict[str, np.ndarray], y: np.ndarray, seg: np.ndarray,
                     cfg: HarnessConfig, embargo: int,
                     wth: np.ndarray | None = None,
@@ -171,6 +195,8 @@ def nested_ensemble(oofs: dict[str, np.ndarray], y: np.ndarray, seg: np.ndarray,
         strategies.append("weather_moe")    # v9: regime-conditional blending
     if prs is not None and len(np.unique(prs)) >= 2 and getattr(cfg, "PRESSURE_MOE", False):
         strategies.append("pressure_moe")   # v32: microstructure-PRESSURE-conditional blending
+    if getattr(cfg, "CONSENSUS_ENSEMBLE", False) and len(names) >= 2:
+        strategies.append("agreement_weighted")   # v35: agreeing-meaning blend (committee-corroborated)
     outer: dict[str, list[float]] = {s: [] for s in strategies}
     for inner, out_idx in purged_segment_splits(seg, cfg.N_SPLITS, embargo):
         inner_sc = {n: pearson(y[inner], oofs[n][inner]) for n in names}
@@ -212,6 +238,8 @@ def nested_ensemble(oofs: dict[str, np.ndarray], y: np.ndarray, seg: np.ndarray,
             g_p, st_p = weather_moe_fit(oofs, y, prs, inner, top, cfg)
             outer["pressure_moe"].append(
                 pearson(y[out_idx], weather_moe_apply(oofs, prs, out_idx, g_p, st_p)))
+        if "agreement_weighted" in outer:
+            outer["agreement_weighted"].append(score(agreement_weighted_weights(oofs, y, inner, top, cfg)))
     honest = {s: float(np.mean(v)) for s, v in outer.items()}
     winner = max(honest, key=honest.get)
     if honest[winner] <= honest["best_single"] + 1e-9:
@@ -254,6 +282,9 @@ def nested_ensemble(oofs: dict[str, np.ndarray], y: np.ndarray, seg: np.ndarray,
         # v32 (IDEAS_ZOO census->built): same one-door mechanics, keyed by the
         # PRESSURE gauge's microstructure states instead of generic dispersion
         weights, weather_states = weather_moe_fit(oofs, y, prs, all_idx, top_full, cfg)
+    elif winner == "agreement_weighted":
+        # v35 agreeing-meaning blend (committee-corroborated member weights)
+        weights = agreement_weighted_weights(oofs, y, all_idx, top_full, cfg) or {top_full[0]: 1.0}
     else:
         weights = hill_climb_generic(top_full_oofs, all_idx,
                                      lambda v: pearson(y, v)) or {top_full[0]: 1.0}

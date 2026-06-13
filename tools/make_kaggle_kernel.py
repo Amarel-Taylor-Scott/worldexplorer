@@ -12,11 +12,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 ENGINE = ROOT / "worldexplorer" / "_engine.py"
-DEFAULT_OUT = ROOT.parent / "kaggle" / "drw_world_explorer_v34" / "kernel.py"
+DEFAULT_OUT = ROOT.parent / "kaggle" / "drw_world_explorer_v35" / "kernel.py"
 
 BANNER = '''\
 # =============================================================================
-# DRW world-explorer v34 -- single-cell Kaggle kernel
+# DRW world-explorer v35 -- single-cell Kaggle kernel
 # (engine built from worldexplorer/engine_src; do not edit here, edit the repo)
 #
 # HOW TO RUN
@@ -77,12 +77,34 @@ BANNER = '''\
 #     regions), bloodhound (faint persistent scent), spider (feature-selection
 #     web), octopus (independent multi-transform arms). Spliced after the
 #     albatross; the metabolism gates how many run (raise TIME_BUDGET for more).
+#
+# v35 (THIS BUILD) -- the system gets smarter at the BEST ENSEMBLE + TRUE
+# FEATURE-SPACE UNDERSTANDING with stability / anti-fragility / agreeing meaning
+# (user directive). All ZERO-CAPACITY -- feature understanding + selection +
+# observation, never new model capacity (capacity feeds the ratchet). Nothing
+# removed; OFF == v34 exactly (89/89 unit branches + e2e identical):
+#   - FEATURE TOPOLOGY: a target-free feature-feature graph -> COMMUNITIES of
+#     features that move together (the 'common-topology features' substrate).
+#   - TEST-LIKENESS FEATURE GATE (marquee, from the v33 testlike AUC=1.0 = the
+#     test set is feature-DISJOINT from train): an X-only per-feature train->
+#     test SHIFT vector + a 'testlike_stable' ranker that DOWNWEIGHTS shift-
+#     driving features (their coefficients extrapolate badly into the disjoint
+#     test) -- the train/test analog of sign-stability. Attacks the deepest
+#     measured cause of the CV->private gap, at selection, with zero capacity.
+#   - CONSENSUS ranker: boosts features whose signal is CORROBORATED by their
+#     topology community (agreeing meaning, shared learning across related feats).
+#   - AGREEMENT-WEIGHTED ensemble strategy: members whose call is independently
+#     echoed by the committee earn more weight (competes in the honest
+#     tournament; ships only if it wins).
+#   - feature_topology_report.csv + antifragility_report.csv: the maps of where
+#     the agreeing, low-shift, stable meaning lives and which members survive a
+#     shifting world (observation; the user can see + steer by them).
 # =============================================================================
 '''
 
 OVERRIDES = '''\
 
-# ---- v34 KAGGLE RUN OVERRIDES (the only knobs changed vs library defaults) --
+# ---- v35 KAGGLE RUN OVERRIDES (the only knobs changed vs library defaults) --
 CFG.TIME_BUDGET_MIN = 120.0  # a touch above v33's 90 so the new wide+narrow
                              # menagerie (albatross slot 7, kestrel slot 8, then
                              # the sensory primitives) actually gets airtime past

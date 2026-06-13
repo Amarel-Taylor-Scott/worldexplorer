@@ -1545,6 +1545,39 @@ class HarnessConfig:
     # many actually run, so raising TIME_BUDGET_MIN gives the menagerie airtime.
     SENSORY_ROSTER: bool = True
 
+    # v35 FEATURE-TOPOLOGY + AGREEMENT + ANTI-FRAGILITY build (user-directed:
+    # "make the system smarter at the best ensemble + true feature-space
+    # understanding with high stability, anti-fragility, agreeing meaning,
+    # relationships between common-topology features, shared learning"). EVERY
+    # piece is ZERO-CAPACITY -- feature understanding + selection + observation,
+    # never new model capacity (capacity feeds the measured complexity ratchet).
+    # Nothing removed; every piece flag-gated; OFF == v34 exactly.
+    #   * FEATURE_TOPOLOGY: a target-free feature-feature graph -> COMMUNITIES of
+    #     features that move together (the 'common topology features' substrate).
+    #   * TESTLIKE_FEATURE_GATE: the marquee lever from the v33 measurement
+    #     testlike AUC=1.0 (test is feature-DISJOINT from train). An X-only
+    #     per-feature train->test shift vector + a 'testlike_stable' ranker that
+    #     DOWNWEIGHTS shift-driving features (their coefficients extrapolate
+    #     badly into the disjoint test) -- the train/test analog of sign_stability.
+    #   * CONSENSUS_FAMILY: a 'consensus' ranker that boosts features whose
+    #     signal is CORROBORATED by their topology community (agreeing meaning,
+    #     shared learning across related features).
+    #   * CONSENSUS_ENSEMBLE: an 'agreement_weighted' blend strategy -- members
+    #     whose call is independently echoed by the committee earn more weight
+    #     (competes in the honest tournament; ships only if it wins).
+    #   * ANTIFRAGILITY_REPORT: per-member stability + worst-world + perturbation
+    #     map (where the strong stable meaning that survives a shifting world is).
+    FEATURE_TOPOLOGY: bool = True
+    FEATURE_GRAPH_CORR: float = 0.6     # leader-cluster |corr| threshold for feature communities
+    FEATURE_GRAPH_MAX: int = 400        # max features clustered (cost guard; the rest are singletons)
+    TESTLIKE_FEATURE_GATE: bool = True
+    SHIFT_PENALTY: float = 0.5          # soft demotion strength on the normalized per-feature train->test shift
+    CONSENSUS_FAMILY: bool = True
+    CONSENSUS_BONUS: float = 0.5        # |corr| boost per unit of community directional consensus
+    CONSENSUS_ENSEMBLE: bool = True
+    AGREEMENT_POWER: float = 1.0        # exponent on a member's committee-agreement in the agreement blend
+    ANTIFRAGILITY_REPORT: bool = True
+
     # v30.1 WINNER NETWORK (observation only, IDEAS.md 1a): the promoted trails
     # as a graph -- output-corr edges, leader-cluster communities. Feeds the
     # queued network-aware member-selection cap (1b) with measurements first.
@@ -2010,7 +2043,12 @@ FAMILIES = ("top", "anon", "market", "decor", "stable", "medoid", "lastN", "dawn
             "stabsel", "irm") \
     + (("sign_stability",) if CFG.SIGNSTAB_FAMILY else ()) \
     + (("pls_weight",) if CFG.PLSRANK_FAMILY else ()) \
-    + (("room_transition",) if CFG.ROOMTRANS_FAMILY else ())
+    + (("room_transition",) if CFG.ROOMTRANS_FAMILY else ()) \
+    + (("testlike_stable",) if CFG.TESTLIKE_FEATURE_GATE else ()) \
+    + (("consensus",) if CFG.CONSENSUS_FAMILY else ())
+# v35: testlike_stable = downweight train->test shift-driving features (the
+# out-of-support lever from testlike AUC=1.0); consensus = boost features
+# corroborated by their target-free topology community (agreeing meaning)
 # v24: stabsel/irm = bootstrap-L1 stability selection + invariant-risk (slope) selection
 # v28: sign_stability = the 4th-place sign-flip gate as a ranker family (flag-gated)
 # v29: pls_weight = PLS-as-selector (multivariate |coef| ranking; flag-gated)
@@ -2327,6 +2365,83 @@ def fit_testlike(X_full: np.ndarray, X_test: np.ndarray, n_work: int,
           for q in (0.1, 0.5, 0.9)}
     return scores, {"auc_holdout": round(auc, 4), "cols_used": int(len(cols_idx)),
                     "rows_fit": int(len(ya)), **qs}
+
+
+# v35 FEATURE-TOPOLOGY globals (target-free; reset + fit by the harness each run;
+# read by the consensus / testlike_stable rankers + the topology report).
+FEATURE_GRAPH: "FeatureGraph | None" = None   # the feature-feature topology + communities
+FEATURE_SHIFT: "np.ndarray | None" = None     # per-feature train->test distribution shift (X only)
+
+
+class FeatureGraph:
+    """v35 FEATURE TOPOLOGY ATLAS -- a target-free map of how the FEATURES relate
+    to EACH OTHER (not to y). Builds a feature-feature |corr| graph on a working-
+    X sample and leader-clusters features into COMMUNITIES (topological groups
+    that move together). Leak-free: y never touches it. The dual of the TERRAIN
+    atlas (which clusters ROWS) -- this clusters COLUMNS. Communities let the
+    'consensus' ranker reward features whose signal is CORROBORATED by their
+    neighbours (agreeing meaning, shared learning across related features) and
+    let the topology report see the shape of the feature space."""
+
+    def __init__(self, corr_thresh: float, max_features: int, seed: int) -> None:
+        self.corr_thresh = float(corr_thresh)
+        self.max_features = int(max_features)
+        self.seed = int(seed)
+        self.community: np.ndarray | None = None      # per-feature community id (-1 = unclustered)
+        self.n_communities = 0
+        self.coherence: np.ndarray | None = None      # per-community internal mean |corr|
+
+    def fit(self, X: np.ndarray, cols: list[str]) -> "FeatureGraph":
+        n, d = X.shape
+        comm = np.full(d, -1, np.int32)
+        step = max(1, n // 20000)
+        Xs = X[::step].astype(np.float64)
+        var = Xs.var(0)
+        cand = [int(i) for i in np.argsort(-var)[: min(self.max_features, d)]]   # cluster the loud features
+        if len(cand) >= 2:
+            sub = Xs[:, cand]
+            sub = (sub - sub.mean(0)) / (sub.std(0) + 1e-9)
+            C = np.abs(np.nan_to_num(np.corrcoef(sub, rowvar=False), nan=0.0))
+            np.fill_diagonal(C, 0.0)
+            leaders: list[int] = []                   # leader clustering on the feature graph
+            for i in range(len(cand)):
+                hit = -1
+                for ci, ld in enumerate(leaders):
+                    if C[i, ld] >= self.corr_thresh:
+                        hit = ci
+                        break
+                if hit < 0:
+                    hit = len(leaders)
+                    leaders.append(i)
+                comm[cand[i]] = hit
+            self.n_communities = len(leaders)
+            coher = np.zeros(self.n_communities, np.float64)
+            for ci in range(self.n_communities):
+                mm = [i for i in range(len(cand)) if comm[cand[i]] == ci]
+                if len(mm) >= 2:
+                    coher[ci] = float(C[np.ix_(mm, mm)].sum() / (len(mm) * (len(mm) - 1)))
+            self.coherence = coher
+        self.community = comm
+        return self
+
+
+def fit_feature_shift(X_work: np.ndarray, X_test: np.ndarray, cfg: HarnessConfig) -> np.ndarray:
+    """v35 per-feature TRAIN->TEST shift (X-only, target-free) -- the marquee
+    response to the v33 measurement testlike AUC=1.0 (the test set is feature-
+    DISJOINT from train). Per feature: the standardized mean difference between
+    the working-train and TEST distributions, plus a |log variance ratio| term.
+    High = the feature MOVES between train and test, so a coefficient learned on
+    train extrapolates badly into the disjoint test region. Consumed by the
+    testlike_stable ranker to DOWNWEIGHT shift-driving features -- the train/test
+    analog of sign-stability. Labels and the leaderboard never touch this."""
+    rtr = np.arange(len(X_work))[:: max(1, len(X_work) // int(cfg.TESTLIKE_ROWS))]
+    rte = np.arange(len(X_test))[:: max(1, len(X_test) // int(cfg.TESTLIKE_ROWS))]
+    a = X_work[rtr].astype(np.float64)
+    b = X_test[rte].astype(np.float64)
+    sd = a.std(0) + 1e-9
+    smd = np.abs(b.mean(0) - a.mean(0)) / sd
+    vr = np.abs(np.log((b.var(0) + 1e-9) / (a.var(0) + 1e-9)))
+    return (smd + 0.5 * vr).astype(np.float64)
 BEACONS: "BeaconField | None" = None
 
 # (fold_signature, family[, k]) -> ranked feature indices. The signature hashes
@@ -2880,6 +2995,55 @@ def _rank_room_transition(spec: ViewportSpec, X_tr: np.ndarray, y_tr: np.ndarray
     return [pool[i] for i in np.argsort(-c)]
 
 
+def _rank_testlike_stable(spec: ViewportSpec, X_tr: np.ndarray, y_tr: np.ndarray,
+                          seg_tr: np.ndarray, pool: list[int], sig: tuple) -> list[int]:
+    # v35 TEST-LIKENESS FEATURE GATE -- the marquee out-of-support lever, from
+    # the v33 measurement testlike AUC=1.0 (the DRW test set is feature-DISJOINT
+    # from train). FEATURE_SHIFT (X-only, target-free) says which features move
+    # most between train and test; a coefficient learned on a high-shift feature
+    # extrapolates badly into that disjoint region. Rank by |corr| SOFT-
+    # DOWNWEIGHTED by the normalized shift -- the train/test analog of
+    # sign_stability (which gates time sign-flips). Zero capacity; X only;
+    # degrades to plain corr ranking when no shift vector is available.
+    c = np.abs(corr_vector(X_tr[:, pool], y_tr))
+    if FEATURE_SHIFT is None or len(FEATURE_SHIFT) <= max(pool):
+        return [pool[i] for i in np.argsort(-c)]
+    sh = np.asarray([FEATURE_SHIFT[int(j)] for j in pool], np.float64)
+    sh = sh / (float(sh.max()) + 1e-9)                       # normalize within the pool
+    score = c * (1.0 - CFG.SHIFT_PENALTY * sh)               # soft demotion, never removal
+    return [pool[i] for i in np.argsort(-score)]
+
+
+def _rank_consensus(spec: ViewportSpec, X_tr: np.ndarray, y_tr: np.ndarray,
+                    seg_tr: np.ndarray, pool: list[int], sig: tuple) -> list[int]:
+    # v35 COMMUNITY CONSENSUS -- "finding agreement / relationships between
+    # common-topology features + shared learning across them". A feature whose
+    # signal is CORROBORATED by its target-free topology COMMUNITY (its
+    # neighbours point the same way toward y) is more trustworthy than a lone
+    # correlate that no related feature confirms. Boost |corr| by how strongly
+    # each feature AGREES with its community's directional consensus. The
+    # community STRUCTURE is target-free (FeatureGraph); the agreement is
+    # measured per-fold (fold-honest). Degrades to corr ranking with no graph.
+    c = corr_vector(X_tr[:, pool], y_tr)                     # signed
+    ac = np.abs(c)
+    if (FEATURE_GRAPH is None or FEATURE_GRAPH.community is None
+            or len(FEATURE_GRAPH.community) <= max(pool)):
+        return [pool[i] for i in np.argsort(-ac)]
+    comm = FEATURE_GRAPH.community
+    pc = np.asarray([int(comm[int(j)]) for j in pool], np.int32)
+    score = ac.copy()
+    for cm in np.unique(pc):
+        if cm < 0:
+            continue
+        m = pc == cm
+        if int(m.sum()) >= 2:
+            mean_signed = float(c[m].mean())
+            coher = abs(mean_signed) / (float(np.abs(c[m]).mean()) + 1e-9)   # 0..1 directional consensus
+            agree = (np.sign(c[m]) == np.sign(mean_signed)).astype(np.float64)
+            score[m] = ac[m] * (1.0 + CFG.CONSENSUS_BONUS * coher * agree)
+    return [pool[i] for i in np.argsort(-score)]
+
+
 def _rank_decor_family(spec: ViewportSpec, X_tr: np.ndarray, y_tr: np.ndarray,
                        seg_tr: np.ndarray, pool: list[int], sig: tuple) -> list[int]:
     base_key = (sig, "top")
@@ -2912,6 +3076,8 @@ RANKERS: dict[str, Callable[..., list[int]]] = {
     "sign_stability": _rank_sign_stability,
     "pls_weight": _rank_pls_weight,
     "room_transition": _rank_room_transition,
+    "testlike_stable": _rank_testlike_stable,
+    "consensus": _rank_consensus,
     "phyllotaxis": _rank_phyllotaxis,
     "compass": _rank_compass,
     "decor": _rank_decor_family,
@@ -6655,6 +6821,30 @@ def parliament_weights(oofs: dict[str, np.ndarray], y: np.ndarray, idx: np.ndarr
     return best_w
 
 
+def agreement_weighted_weights(oofs: dict[str, np.ndarray], y: np.ndarray, idx: np.ndarray,
+                               names: list[str], cfg: HarnessConfig) -> dict[str, float]:
+    """v35 'AGREEING MEANING' blend (user-directed): weight each member by its
+    signal AND by how much its prediction is CORROBORATED by the rest of the
+    committee (mean |corr| to the other members). A member whose call is
+    independently echoed is more trustworthy on a feature-disjoint / out-of-
+    support test than a lone strong-but-unconfirmed one -- agreement is a proxy
+    for the stable shared meaning that survives the shift. Competes in the same
+    honest nested tournament as every other strategy, so it ships ONLY if it
+    actually generalizes (it cannot collapse the blend to a redundant cluster
+    unnoticed -- the outer folds + the viewport-family cap arbitrate)."""
+    if len(names) < 2:
+        return {names[0]: 1.0} if names else {}
+    M = {n: np.asarray(oofs[n][idx], np.float64) for n in names}
+    corr = {n: max(pearson(y[idx], M[n]), 0.0) for n in names}
+    agree = {}
+    for n in names:
+        others = [abs(pearson(M[n], M[m])) for m in names if m != n]
+        agree[n] = float(np.mean(others)) if others else 0.0
+    w = {n: corr[n] * (agree[n] ** float(cfg.AGREEMENT_POWER)) for n in names}
+    s = sum(w.values())
+    return {n: v / s for n, v in w.items()} if s > 0 else {n: 1.0 / len(names) for n in names}
+
+
 def nested_ensemble(oofs: dict[str, np.ndarray], y: np.ndarray, seg: np.ndarray,
                     cfg: HarnessConfig, embargo: int,
                     wth: np.ndarray | None = None,
@@ -6668,6 +6858,8 @@ def nested_ensemble(oofs: dict[str, np.ndarray], y: np.ndarray, seg: np.ndarray,
         strategies.append("weather_moe")    # v9: regime-conditional blending
     if prs is not None and len(np.unique(prs)) >= 2 and getattr(cfg, "PRESSURE_MOE", False):
         strategies.append("pressure_moe")   # v32: microstructure-PRESSURE-conditional blending
+    if getattr(cfg, "CONSENSUS_ENSEMBLE", False) and len(names) >= 2:
+        strategies.append("agreement_weighted")   # v35: agreeing-meaning blend (committee-corroborated)
     outer: dict[str, list[float]] = {s: [] for s in strategies}
     for inner, out_idx in purged_segment_splits(seg, cfg.N_SPLITS, embargo):
         inner_sc = {n: pearson(y[inner], oofs[n][inner]) for n in names}
@@ -6709,6 +6901,8 @@ def nested_ensemble(oofs: dict[str, np.ndarray], y: np.ndarray, seg: np.ndarray,
             g_p, st_p = weather_moe_fit(oofs, y, prs, inner, top, cfg)
             outer["pressure_moe"].append(
                 pearson(y[out_idx], weather_moe_apply(oofs, prs, out_idx, g_p, st_p)))
+        if "agreement_weighted" in outer:
+            outer["agreement_weighted"].append(score(agreement_weighted_weights(oofs, y, inner, top, cfg)))
     honest = {s: float(np.mean(v)) for s, v in outer.items()}
     winner = max(honest, key=honest.get)
     if honest[winner] <= honest["best_single"] + 1e-9:
@@ -6751,6 +6945,9 @@ def nested_ensemble(oofs: dict[str, np.ndarray], y: np.ndarray, seg: np.ndarray,
         # v32 (IDEAS_ZOO census->built): same one-door mechanics, keyed by the
         # PRESSURE gauge's microstructure states instead of generic dispersion
         weights, weather_states = weather_moe_fit(oofs, y, prs, all_idx, top_full, cfg)
+    elif winner == "agreement_weighted":
+        # v35 agreeing-meaning blend (committee-corroborated member weights)
+        weights = agreement_weighted_weights(oofs, y, all_idx, top_full, cfg) or {top_full[0]: 1.0}
     else:
         weights = hill_climb_generic(top_full_oofs, all_idx,
                                      lambda v: pearson(y, v)) or {top_full[0]: 1.0}
@@ -6984,6 +7181,79 @@ def prediction_distribution_report(blend_oof: np.ndarray, test_pred: np.ndarray)
     rows = [{"distribution": "working_blend_oof", **stats(az)},
             {"distribution": "test_prediction", **stats(bz)}]
     return pd.DataFrame(rows)
+
+
+def feature_topology_report(graph, shift, cols, X, y) -> pd.DataFrame:
+    """v35 observation: the FEATURE TOPOLOGY. Per target-free community -- its
+    size, internal coherence (how tightly its features move together), mean/max
+    |corr| to y, its DIRECTIONAL signal consensus (does the community agree on a
+    direction?), and its mean train->test shift. The map of 'common-topology
+    features' that shows WHERE the agreeing, low-shift, stable meaning lives --
+    high coherence + high consensus + LOW shift = a community whose shared signal
+    should survive the disjoint test. Pure observation; gates nothing."""
+    if graph is None or getattr(graph, "community", None) is None:
+        return pd.DataFrame()
+    comm = graph.community
+    step = max(1, len(X) // 20000)
+    Xs, ys = X[::step], y[::step]
+    rows = []
+    for cm in range(int(graph.n_communities)):
+        idx = np.where(comm == cm)[0]
+        if len(idx) == 0:
+            continue
+        c = corr_vector(Xs[:, idx], ys)
+        ac = np.abs(c)
+        mean_signed = float(c.mean())
+        coher = (float(graph.coherence[cm]) if graph.coherence is not None
+                 and cm < len(graph.coherence) else 0.0)
+        consensus = abs(mean_signed) / (float(ac.mean()) + 1e-9)
+        sh = float(np.mean([shift[int(j)] for j in idx])) if shift is not None else float("nan")
+        rows.append({"community": int(cm), "size": int(len(idx)),
+                     "topology_coherence": round(coher, 4),
+                     "mean_abs_corr_y": round(float(ac.mean()), 4),
+                     "max_abs_corr_y": round(float(ac.max()), 4),
+                     "signal_consensus": round(consensus, 4),
+                     "mean_train_test_shift": round(sh, 4) if np.isfinite(sh) else None})
+    return pd.DataFrame(rows).sort_values("mean_abs_corr_y", ascending=False)
+
+
+def antifragility_report(members: dict[str, np.ndarray], member_lessons: dict,
+                         y: np.ndarray, seg: np.ndarray, terr, wth, cfg) -> pd.DataFrame:
+    """v35 observation: the ANTI-FRAGILITY of each candidate member -- not just
+    'does it survive' but how it holds under STRESS. Blends the worst-world corr
+    FLOOR across time/terrain/weather, the consistency gap (mean - worst world),
+    the stability probe (lower RMSE = steadier under input noise), and the
+    predator's perturbation width (positive under a shrunken viewport = robust).
+    High score = strong stable meaning that does NOT break when the world shifts
+    -- the members a high-stability / anti-fragile blend should lean on. Gates
+    nothing here; it is the map the user asked to be able to see + steer by."""
+    worlds = [("seg", seg)]
+    if terr is not None:
+        worlds.append(("terrain", terr))
+    if wth is not None:
+        worlds.append(("weather", wth))
+    rows = []
+    for nm in members:
+        l = member_lessons.get(nm)
+        floors = [pearson(y[ids == s], members[nm][ids == s])
+                  for _, ids in worlds for s in np.unique(ids)
+                  if int((ids == s).sum()) >= cfg.FORENSIC_MIN_WORLD_ROWS]
+        wfloor = float(min(floors)) if floors else 0.0
+        mean_c = float(np.mean(floors)) if floors else 0.0
+        stab = float(l.stability) if (l is not None and np.isfinite(l.stability)) else float("nan")
+        perturb = float(l.perturb_width) if (l is not None and np.isfinite(l.perturb_width)) else float("nan")
+        af = wfloor - 0.5 * max(0.0, mean_c - wfloor)        # reward a high, CONSISTENT floor
+        if np.isfinite(stab):
+            af -= 0.1 * stab                                  # penalize fragility under noise
+        if np.isfinite(perturb):
+            af += 0.5 * max(0.0, perturb)                     # reward holding under perturbation
+        rows.append({"member": nm, "world_floor": round(wfloor, 4),
+                     "mean_world": round(mean_c, 4),
+                     "consistency_gap": round(mean_c - wfloor, 4),
+                     "stability_rmse": round(stab, 4) if np.isfinite(stab) else None,
+                     "perturb_width": round(perturb, 4) if np.isfinite(perturb) else None,
+                     "antifragility": round(af, 4)})
+    return pd.DataFrame(rows).sort_values("antifragility", ascending=False)
 # ----------------------------------------------------------------------------
 # 11. Harness orchestration
 # ----------------------------------------------------------------------------
@@ -8338,6 +8608,42 @@ class ExplorerHarness:
 
 
     def _pre_scans(self, rs: "_RunState") -> None:
+        # ---- v35 FEATURE TOPOLOGY + TRAIN->TEST SHIFT (target-free, X only) ----
+        # Built BEFORE the satellite survey so the consensus / testlike_stable
+        # ranker families have their substrate when first surveyed. y never
+        # touches the graph or the shift; both are leak-free everywhere.
+        global FEATURE_GRAPH, FEATURE_SHIFT
+        FEATURE_GRAPH = None
+        FEATURE_SHIFT = None
+        if rs.cfg.FEATURE_TOPOLOGY:
+            try:
+                FEATURE_GRAPH = FeatureGraph(rs.cfg.FEATURE_GRAPH_CORR, rs.cfg.FEATURE_GRAPH_MAX,
+                                             rs.cfg.SEED).fit(rs.Xp, rs.cols)
+                log("feature_topology_built", communities=int(FEATURE_GRAPH.n_communities),
+                    clustered=int((FEATURE_GRAPH.community >= 0).sum()),
+                    note="target-free feature-feature communities (common-topology groups)")
+            except Exception as e:
+                FEATURE_GRAPH = None
+                log("feature_topology_skipped", err=str(e)[:80])
+        if rs.cfg.TESTLIKE_FEATURE_GATE:
+            try:
+                FEATURE_SHIFT = fit_feature_shift(rs.X_full[:rs.n_work], rs.X_test, rs.cfg)
+                log("feature_shift_built", features=int(len(FEATURE_SHIFT)),
+                    q50=round(float(np.quantile(FEATURE_SHIFT, 0.5)), 4),
+                    q90=round(float(np.quantile(FEATURE_SHIFT, 0.9)), 4),
+                    high_shift=int((FEATURE_SHIFT >= np.quantile(FEATURE_SHIFT, 0.9)).sum()),
+                    note="per-feature train->test shift (X only); testlike_stable demotes high-shift features")
+            except Exception as e:
+                FEATURE_SHIFT = None
+                log("feature_shift_skipped", err=str(e)[:80])
+        if FEATURE_GRAPH is not None:
+            try:
+                rs.topo_df = feature_topology_report(FEATURE_GRAPH, FEATURE_SHIFT, rs.cols, rs.Xp, rs.yp)
+                if not rs.topo_df.empty:
+                    write_csv(rs.topo_df, "feature_topology_report.csv")
+            except Exception as e:
+                log("feature_topology_report_skipped", err=str(e)[:80])
+
         # ---- SYMMETRY FIELD: even-vs-odd response of the strongest features ---
         rs.sym_df = symmetry_field_report(rs.Xp, rs.yp, rs.cols)
         write_csv(rs.sym_df, "symmetry_field_report.csv")
@@ -9197,6 +9503,22 @@ class ExplorerHarness:
         except Exception as e:
             log("segment_senate_skipped", err=str(e)[:80])
 
+        # ---- v35 ANTI-FRAGILITY map (observation): which members carry strong
+        # stable meaning that holds under stress (worst-world floor + stability +
+        # perturbation). The map the user asked to see + steer by; gates nothing.
+        try:
+            if rs.cfg.ANTIFRAGILITY_REPORT:
+                af_df = antifragility_report(rs.members, rs.member_lessons, rs.yp, rs.segp,
+                                             rs.terr_p, rs.wth_p, rs.cfg)
+                if not af_df.empty:
+                    write_csv(af_df, "antifragility_report.csv")
+                    log("antifragility", members=len(af_df),
+                        most_antifragile=str(af_df.iloc[0]["member"]),
+                        top_score=round(float(af_df.iloc[0]["antifragility"]), 4),
+                        note="worst-world floor + stability + perturbation; high = survives a shifting world")
+        except Exception as e:
+            log("antifragility_skipped", err=str(e)[:80])
+
 
     def _forward_holdout(self, rs: "_RunState") -> None:
         # ---- forward-drift check + forward gate (within WORKING region) --------
@@ -9608,7 +9930,7 @@ class ExplorerHarness:
             rs.seed_bank.append(rs.l.key)
             if len(rs.seed_bank) >= rs.cfg.SEEDBANK_SIZE:
                 break
-        rs.cairn = {"version": "v34", "data_source": rs.data_source,
+        rs.cairn = {"version": "v35", "data_source": rs.data_source,
                  "gauge_edges": [float(e) for e in (GAUGE.edges if GAUGE is not None else [])],
                  "terrain_populations": rs.t_pop, "weather_populations": rs.w_pop,
                  "even_dominant": rs.n_even, "trap_count": len(TRAPS),
@@ -9630,7 +9952,7 @@ class ExplorerHarness:
                           key=lambda l: -(l.oof_corr - l.wf_corr))
             rs.decayers = list(dict.fromkeys(f"{l.skill}|{l.family}" for l in rs.decj))[: rs.cfg.LEDGER_MAX_DECAYERS]
             rs.gcount = int((rs.prev_led.get("governor") or {}).get("count", 0)) + 1
-            rs.ledger = {"version": "v34", "data_source": rs.data_source,
+            rs.ledger = {"version": "v35", "data_source": rs.data_source,
                       "governor": {"beta": round(float(GOVERNOR.get("beta", 0.0)), 5),
                                    "lambda": round(float(GOVERNOR.get("lambda", 0.0)), 5),
                                    "width_decay_corr": (round(rs.width_decay_corr, 5)
@@ -9748,7 +10070,7 @@ class ExplorerHarness:
              "No previous cairn was found; ours now stands."),
         ]
         write_chronicle({
-            "title": f"DRW world-explorer v34 ({rs.data_source})",
+            "title": f"DRW world-explorer v35 ({rs.data_source})",
             "features": len(rs.cols), "train_rows": rs.n, "sealed_rows": int(len(rs.sealed_idx)),
             "data_source": rs.data_source, "terrain_pop": rs.t_pop, "weather_pop": rs.w_pop,
             "even_dominant": rs.n_even, "explorer_lines": rs.explorer_lines,
