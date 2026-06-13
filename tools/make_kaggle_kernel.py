@@ -12,11 +12,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 ENGINE = ROOT / "worldexplorer" / "_engine.py"
-DEFAULT_OUT = ROOT.parent / "kaggle" / "drw_world_explorer_v32" / "kernel.py"
+DEFAULT_OUT = ROOT.parent / "kaggle" / "drw_world_explorer_v33" / "kernel.py"
 
 BANNER = '''\
 # =============================================================================
-# DRW world-explorer v32 -- single-cell Kaggle kernel
+# DRW world-explorer v33 -- single-cell Kaggle kernel
 # (engine built from worldexplorer/engine_src; do not edit here, edit the repo)
 #
 # HOW TO RUN
@@ -53,6 +53,10 @@ BANNER = '''\
 #     tournament. Plus: segment senate, prediction-distribution shift,
 #     redundancy floor (new_info >= 0.05 at admission), forward-chosen
 #     factor-neutral blend (margin-gated), room_transition family.
+#   - v33 WIDE-CONFIGURATION GRID: grid_* shipping configs (wide / agreeing /
+#     stable channel preferences vs the sharp greedy control) judged by the
+#     robust court; 7 wide warm seeds at evolution gen-0; the 'albatross'
+#     wide-glider persona joins the roster (slot 7, N_EXPLORERS -> 8).
 #   - LIGHT-SEARCH budget (the measured sealed-cliff lever: the 3 best private
 #     runs were 41-70 min; every 200+ min run regressed).
 # =============================================================================
@@ -60,7 +64,7 @@ BANNER = '''\
 
 OVERRIDES = '''\
 
-# ---- v32 KAGGLE RUN OVERRIDES (the only knobs changed vs library defaults) --
+# ---- v33 KAGGLE RUN OVERRIDES (the only knobs changed vs library defaults) --
 CFG.TIME_BUDGET_MIN = 90.0   # LIGHT SEARCH: v8/v9/v11 (41-70 min) are the 3 best
                              # private runs; every 200+ min run fell off the
                              # sealed cliff. The governor handles the rest.
