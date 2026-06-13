@@ -71,6 +71,62 @@ def _resolve(root: str, explicit: "str | None", names) -> "str | None":
     return _first_existing(root, names)
 
 
+def _train_rows(train_path: "str | None") -> int:
+    """Row count from parquet metadata (no data load); 0 if unknown."""
+    try:
+        if train_path and train_path.endswith((".parquet", ".pq")):
+            import pyarrow.parquet as pq
+            return int(pq.ParquetFile(train_path).metadata.num_rows)
+    except Exception:
+        pass
+    return 0
+
+
+def _run_engine_native(root: str, train_path: "str | None", out: str, cfg: dict, overrides: dict) -> Any:
+    """Run the engine DIRECTLY on the competition dir (no adapter round-trip).
+    The engine loads train/test.parquet, does its own feature engineering, and
+    writes submission.csv mapped onto the competition's sample_submission."""
+    import pandas as pd
+
+    from .adapter import Result, _load_engine
+
+    eng = _load_engine()
+    c = eng.HarnessConfig()
+    c.DATA_ROOTS = (root,) + tuple(getattr(c, "DATA_ROOTS", ()))
+    c.OUT_DIR = out
+    c.ALLOW_SYNTHETIC_FALLBACK = False
+    tb = cfg.get("time_budget_min")
+    if tb not in (None, "auto"):
+        c.TIME_BUDGET_MIN = float(tb)
+    # SAFETY CLAMP: the engine's DRW-tuned EMBARGO_ROWS=720 (and N_SEGMENTS) are
+    # correct on a 500k-row set but strip CV folds to empty on small data. Clamp
+    # to a safe fraction of the actual row count unless the user overrode them
+    # (a no-op on DRW: min(720, 525886//200=2629)=720, min(12, 1314)=12).
+    nrows = _train_rows(train_path)
+    if nrows > 0:
+        if "EMBARGO_ROWS" not in overrides:
+            c.EMBARGO_ROWS = max(0, min(int(c.EMBARGO_ROWS), nrows // 200))
+        if "N_SEGMENTS" not in overrides:
+            c.N_SEGMENTS = max(4, min(int(c.N_SEGMENTS), max(4, nrows // 400)))
+    for k, v in overrides.items():
+        if hasattr(c, k):
+            setattr(c, k, v)
+    eng.CFG = c
+    eng.OUT = Path(out)
+    if cfg.get("verbose"):
+        print(f"[worldexplorer.kaggle] engine-native run (budget={c.TIME_BUDGET_MIN} min) on {root}")
+    summary = eng.ExplorerHarness(c).run()           # writes out/submission.csv itself
+    sub_file = Path(out) / "submission.csv"
+    preds = pd.read_csv(sub_file) if sub_file.exists() else pd.DataFrame()
+    metric = eng.PROFILE.get("metric", "pearson") if isinstance(getattr(eng, "PROFILE", None), dict) else "pearson"
+    prof = type("P", (), {"metric": metric})()
+    if cfg.get("verbose"):
+        print(f"[worldexplorer.kaggle] engine-native done; submission rows={len(preds)} "
+              f"sealed={summary.get('sealed_holdout_corr')}")
+    return Result(predictions=preds, score=summary.get("sealed_holdout_corr"),
+                  profile=prof, report=summary, artifacts_dir=str(out))
+
+
 def run(config: "dict | None" = None) -> Any:
     """Run the world-explorer on a Kaggle competition from a CONFIG dict and
     write submission.csv. Returns the worldexplorer Result (predictions + the
@@ -102,6 +158,21 @@ def run(config: "dict | None" = None) -> Any:
         v = cfg.get(key)
         if v and v != "auto":
             overrides[field] = v
+
+    # ENGINE-NATIVE FAST PATH: when the data is already in the engine's native
+    # layout (train/test parquet + a 'label' target + a sample_submission), run
+    # the engine DIRECTLY on the competition dir -- no adapter round-trip through
+    # pandas, which on a 525k x 800 set like DRW would double peak memory and risk
+    # an OOM. Faithful to the single-cell kernel; the engine writes submission.csv
+    # mapped onto the competition's own sample_submission. Otherwise use the
+    # general zero-config adapter (auto metric/geometry/ids/encodings).
+    native = cfg.get("engine_native", "auto")
+    native_ok = (native is True) or (
+        native == "auto" and cfg["target"] in (None, "label")
+        and bool(train_path) and train_path.endswith((".parquet", ".pq"))
+        and bool(test_path) and bool(sub_path))
+    if native_ok:
+        return _run_engine_native(root, train_path, out, cfg, overrides)
 
     result = explore(train_path, target=cfg["target"], test=test_path, out=out,
                      time_budget=cfg["time_budget_min"], verbose=cfg["verbose"], **overrides)
