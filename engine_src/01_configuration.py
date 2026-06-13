@@ -483,6 +483,25 @@ class HarnessConfig:
     AGREEMENT_POWER: float = 1.0        # exponent on a member's committee-agreement in the agreement blend
     ANTIFRAGILITY_REPORT: bool = True
 
+    # v36 EXPLORER ADVISOR LOOP (user-directed): EXPORT the explorers' findings as
+    # a graph an EXTERNAL model (an LLM / pattern-recognition engine) can read, and
+    # INGEST that advisor's instructions back as EXPLORATION PRIORS the next run
+    # measures through the same honest doors. The advisor shapes WHERE/HOW to look
+    # (families, transforms, skills, feature communities, personas, hypotheses) --
+    # it NEVER ships a model and NEVER sees labels or the leaderboard (the sacred
+    # rule): its suggestions are HYPOTHESES that must earn their place by
+    # measurement, so it cannot become a backdoor or feed the complexity ratchet
+    # (the governor still penalizes whatever capacity it nudges toward). Offline-
+    # safe: the export is an artifact, the LLM is called OUT-OF-BAND (Kaggle is
+    # Internet-OFF), and the advice returns as an INPUT file the next run reads --
+    # exactly the cross-run learning-ledger pattern, now with a human-knowledge-
+    # trained advisor in the loop. No advisor file present => exact no-op.
+    EXPORT_FINDINGS: bool = True        # write explorer_findings_graph.json (the LLM-readable findings graph)
+    ADVISOR_INGEST: bool = True         # read advisor_instructions.json -> exploration priors + warm genomes
+    ADVISOR_PATHS: tuple[str, ...] = ("advisor_instructions.json",)
+    ADVISOR_PRIOR_W: float = 0.02       # bandit lift per unit of advisor family/transform/skill weight
+    ADVISOR_MAX_GENOMES: int = 8        # advisor-suggested warm genomes germinated at evolution gen-0
+
     # v30.1 WINNER NETWORK (observation only, IDEAS.md 1a): the promoted trails
     # as a graph -- output-corr edges, leader-cluster communities. Feeds the
     # queued network-aware member-selection cap (1b) with measurements first.

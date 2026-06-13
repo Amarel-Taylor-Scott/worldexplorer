@@ -1578,6 +1578,25 @@ class HarnessConfig:
     AGREEMENT_POWER: float = 1.0        # exponent on a member's committee-agreement in the agreement blend
     ANTIFRAGILITY_REPORT: bool = True
 
+    # v36 EXPLORER ADVISOR LOOP (user-directed): EXPORT the explorers' findings as
+    # a graph an EXTERNAL model (an LLM / pattern-recognition engine) can read, and
+    # INGEST that advisor's instructions back as EXPLORATION PRIORS the next run
+    # measures through the same honest doors. The advisor shapes WHERE/HOW to look
+    # (families, transforms, skills, feature communities, personas, hypotheses) --
+    # it NEVER ships a model and NEVER sees labels or the leaderboard (the sacred
+    # rule): its suggestions are HYPOTHESES that must earn their place by
+    # measurement, so it cannot become a backdoor or feed the complexity ratchet
+    # (the governor still penalizes whatever capacity it nudges toward). Offline-
+    # safe: the export is an artifact, the LLM is called OUT-OF-BAND (Kaggle is
+    # Internet-OFF), and the advice returns as an INPUT file the next run reads --
+    # exactly the cross-run learning-ledger pattern, now with a human-knowledge-
+    # trained advisor in the loop. No advisor file present => exact no-op.
+    EXPORT_FINDINGS: bool = True        # write explorer_findings_graph.json (the LLM-readable findings graph)
+    ADVISOR_INGEST: bool = True         # read advisor_instructions.json -> exploration priors + warm genomes
+    ADVISOR_PATHS: tuple[str, ...] = ("advisor_instructions.json",)
+    ADVISOR_PRIOR_W: float = 0.02       # bandit lift per unit of advisor family/transform/skill weight
+    ADVISOR_MAX_GENOMES: int = 8        # advisor-suggested warm genomes germinated at evolution gen-0
+
     # v30.1 WINNER NETWORK (observation only, IDEAS.md 1a): the promoted trails
     # as a graph -- output-corr edges, leader-cluster communities. Feeds the
     # queued network-aware member-selection cap (1b) with measurements first.
@@ -5418,6 +5437,15 @@ if CFG.SENSORY_ROSTER:
     EXPLORER_TRAITS[_ins:_ins] = _SENSORY_PERSONAS
 
 
+# v36 ADVISOR LOOP globals: set by the harness from an optional advisor_
+# instructions.json (an external model / LLM's guidance); read by ucb_pick as
+# ADDITIVE exploration priors. Empty => no-op. The advisor never sees labels or
+# the leaderboard and never ships a model -- it only nudges WHERE/HOW to look,
+# and every nudge is still measured through the honest doors.
+ADVISOR: dict = {}              # raw loaded advisor instructions (for the chronicle + report)
+ADVISOR_PRIORS: dict = {}       # {"family": {...}, "transform": {...}, "skill": {...}} lift weights
+
+
 class Explorer:
     def __init__(self, traits: dict[str, Any], cfg: HarnessConfig) -> None:
         self.traits = traits
@@ -5514,7 +5542,17 @@ class Explorer:
                     if st and int(st.get("n", 0)) >= 2:
                         gen_prior += self.cfg.LEDGER_PRIOR_W * (float(st.get("mean_oof", 0.0))
                                                                - 2.0 * max(0.0, float(st.get("mean_decay", 0.0))))
-            score = prior + social + explore - caution_pen - venom + quorum_lift + recruit + gen_prior
+            # v36 advisor loop: an external model's instructions nudge WHERE/HOW
+            # to look (additive prior on family/transform/skill). Still measured
+            # through the honest doors; empty/off => 0 => no-op.
+            advisor = 0.0
+            if self.cfg.ADVISOR_INGEST and ADVISOR_PRIORS:
+                advisor = self.cfg.ADVISOR_PRIOR_W * (
+                    float(ADVISOR_PRIORS.get("family", {}).get(spec.family, 0.0))
+                    + float(ADVISOR_PRIORS.get("transform", {}).get(spec.transform, 0.0))
+                    + float(ADVISOR_PRIORS.get("skill", {}).get(skill, 0.0)))
+            score = (prior + social + explore - caution_pen - venom + quorum_lift
+                     + recruit + gen_prior + advisor)
             if score > best_score:
                 best, best_score = (skill, spec), score
         return best
@@ -7254,6 +7292,74 @@ def antifragility_report(members: dict[str, np.ndarray], member_lessons: dict,
                      "perturb_width": round(perturb, 4) if np.isfinite(perturb) else None,
                      "antifragility": round(af, 4)})
     return pd.DataFrame(rows).sort_values("antifragility", ascending=False)
+
+
+def build_findings_graph(library, result, final_weights, summary, gov, testlike_info,
+                         topo_df, net_summary, af_df, cfg) -> dict:
+    """v36 EXPLORER FINDINGS GRAPH -- consolidate the run's discoveries into ONE
+    structured, LLM-readable artifact an external model (an LLM / pattern-
+    recognition engine) can reason over: the measured LAWS of this world, the
+    research NODES (the promoted trails), the prediction + feature-topology
+    COMMUNITIES, the interesting REGIONS (agreeing/low-shift vs shift-driving),
+    the anti-fragile members, the shipped blend, and the OPEN QUESTIONS. It also
+    carries the advice SCHEMA so the advisor knows the exact (sacred-rule-safe)
+    response format -- it may shape WHERE/HOW to explore, never labels or the LB.
+    Pure observation; assembling it changes no decision."""
+    laws = {"governor_beta": (gov or {}).get("beta"),
+            "governor_lambda": (gov or {}).get("lambda"),
+            "width_decay_corr": (gov or {}).get("width_decay_corr"),
+            "honest_cv": summary.get("honest_scores", {}).get(summary.get("ensemble_winner")),
+            "forward_blend_corr": summary.get("forward_blend_corr"),
+            "sealed_holdout_corr": summary.get("sealed_holdout_corr"),
+            "cv_forward_gap": (summary.get("anti_decay") or {}).get("cv_forward_gap"),
+            "testlike_auc": (testlike_info or {}).get("auc_holdout"),
+            "doctrine": ("complexity ratchet: every in-working-region signal rewards in-distribution "
+                         "fit, none sees out-of-period decay; sealed cliff ~0.115; testlike AUC=1.0 on "
+                         "DRW => the test set is feature-DISJOINT (out-of-support), so train-internal "
+                         "robustness itself can predict decay")}
+    nodes = []
+    for l in sorted(library.promoted(), key=lesson_fitness, reverse=True)[:40]:
+        nodes.append({"key": l.key, "family": l.family, "skill": l.skill, "transform": l.transform,
+                      "k": int(l.k), "oof_corr": round(float(l.oof_corr), 5),
+                      "wf_corr": round(float(l.wf_corr), 5) if np.isfinite(l.wf_corr) else None,
+                      "width": round(float(l.width), 5) if np.isfinite(l.width) else None,
+                      "decay_oof_minus_wf": (round(float(l.oof_corr - l.wf_corr), 5)
+                                             if np.isfinite(l.wf_corr) else None)})
+    topo = topo_df.to_dict("records") if (topo_df is not None and not topo_df.empty) else []
+    interesting = {}
+    if topo:
+        interesting["agreeing_low_shift_communities"] = [
+            {"community": r["community"], "consensus": r.get("signal_consensus"),
+             "shift": r.get("mean_train_test_shift"), "mean_abs_corr_y": r.get("mean_abs_corr_y")}
+            for r in topo
+            if (r.get("signal_consensus") or 0) >= 0.5
+            and (r.get("mean_train_test_shift") is None or (r.get("mean_train_test_shift") or 0) <= 0.15)][:10]
+    af = af_df.to_dict("records")[:10] if (af_df is not None and not af_df.empty) else []
+    return {
+        "version": "v36", "data_source": summary.get("data_source"),
+        "measured_laws": laws,
+        "research_nodes": nodes,
+        "prediction_communities": net_summary or {},
+        "feature_topology": topo[:30],
+        "interesting_regions": interesting,
+        "antifragility_top": af,
+        "shipped_blend": {"selector": (summary.get("forensics") or {}).get("shipped_selector"),
+                          "weights": final_weights},
+        "open_questions": [
+            "The test set is feature-disjoint (testlike AUC=1.0): which feature COMMUNITIES are most "
+            "likely to carry signal that survives out-of-support? (high consensus + low train->test shift)",
+            "Wide in-sample-robust paths decayed MORE (width_decay_corr>0): what SHAPE of path generalizes "
+            "to a disjoint test -- and how should the wide/narrow mix be tuned?",
+            "Which families/transforms/feature-regions deserve more vs less exploration budget next run?",
+            "Are there relationships between common-topology features the search is under-exploiting?"],
+        "advice_schema": {
+            "_note": "SACRED RULE: shape WHERE/HOW to explore only. Do NOT use labels, the leaderboard, "
+                     "or hidden targets. Suggestions are hypotheses re-measured through the honest doors.",
+            "family_priors": "{family_name: weight in [-1,1]}  (e.g. {'consensus': 1.0, 'shadow': -0.5})",
+            "transform_priors": "{transform_name: weight in [-1,1]}",
+            "skill_priors": "{skill_name: weight in [-1,1]}",
+            "warm_genomes": "['skill|familyK_transform', ...]  hypotheses to seed at evolution gen-0",
+            "notes": "free-text rationale (logged, not executed)"}}
 # ----------------------------------------------------------------------------
 # 11. Harness orchestration
 # ----------------------------------------------------------------------------
@@ -8318,6 +8424,43 @@ class ExplorerHarness:
                     break
         except Exception:
             pass
+
+        # ---- v36 ADVISOR INGEST: read an external model's exploration guidance --
+        # An optional advisor_instructions.json (produced OUT-OF-BAND by an LLM /
+        # pattern-recognition engine reading the previous run's findings graph)
+        # becomes ADDITIVE bandit priors + warm genomes. X-side guidance only --
+        # the schema has no label/LB fields and the harness reads only the allowed
+        # keys, so the sacred rule holds. No file => exact no-op.
+        global ADVISOR, ADVISOR_PRIORS
+        ADVISOR = {}
+        ADVISOR_PRIORS = {}
+        if rs.cfg.ADVISOR_INGEST:
+            try:
+                rs.adv_paths = [Path(p) for p in rs.cfg.ADVISOR_PATHS]
+                try:
+                    rs.adv_paths += list(Path("/kaggle/input").glob("*/advisor_instructions.json"))
+                except Exception:
+                    pass
+                for rs.apth in rs.adv_paths:
+                    if rs.apth.exists():
+                        ADVISOR = json.loads(rs.apth.read_text())
+                        ADVISOR_PRIORS = {"family": dict(ADVISOR.get("family_priors") or {}),
+                                          "transform": dict(ADVISOR.get("transform_priors") or {}),
+                                          "skill": dict(ADVISOR.get("skill_priors") or {})}
+                        for rs.wk in (ADVISOR.get("warm_genomes") or [])[: rs.cfg.ADVISOR_MAX_GENOMES]:
+                            rs.ag = parse_genome_key(rs.wk)
+                            if rs.ag is not None and all(g.key != rs.ag.key for g in SEEDBANK):
+                                SEEDBANK.append(rs.ag)         # advisor hypotheses re-measured at gen-0
+                        log("advisor_ingested", from_file=str(rs.apth),
+                            family_priors=len(ADVISOR_PRIORS["family"]),
+                            transform_priors=len(ADVISOR_PRIORS["transform"]),
+                            skill_priors=len(ADVISOR_PRIORS["skill"]),
+                            warm_genomes=len(ADVISOR.get("warm_genomes") or []),
+                            note=str(ADVISOR.get("notes", ""))[:120])
+                        break
+            except Exception as e:
+                ADVISOR = {}; ADVISOR_PRIORS = {}
+                log("advisor_ingest_skipped", err=str(e)[:80])
 
         def circadian(frac_target: float, tag: str) -> None:
             """v10 governor: the body has a clock. If the elapsed fraction of
@@ -9510,6 +9653,7 @@ class ExplorerHarness:
             if rs.cfg.ANTIFRAGILITY_REPORT:
                 af_df = antifragility_report(rs.members, rs.member_lessons, rs.yp, rs.segp,
                                              rs.terr_p, rs.wth_p, rs.cfg)
+                rs.af_df_obj = af_df          # v36: kept for the findings-graph export
                 if not af_df.empty:
                     write_csv(af_df, "antifragility_report.csv")
                     log("antifragility", members=len(af_df),
@@ -9930,7 +10074,7 @@ class ExplorerHarness:
             rs.seed_bank.append(rs.l.key)
             if len(rs.seed_bank) >= rs.cfg.SEEDBANK_SIZE:
                 break
-        rs.cairn = {"version": "v35", "data_source": rs.data_source,
+        rs.cairn = {"version": "v36", "data_source": rs.data_source,
                  "gauge_edges": [float(e) for e in (GAUGE.edges if GAUGE is not None else [])],
                  "terrain_populations": rs.t_pop, "weather_populations": rs.w_pop,
                  "even_dominant": rs.n_even, "trap_count": len(TRAPS),
@@ -9952,7 +10096,7 @@ class ExplorerHarness:
                           key=lambda l: -(l.oof_corr - l.wf_corr))
             rs.decayers = list(dict.fromkeys(f"{l.skill}|{l.family}" for l in rs.decj))[: rs.cfg.LEDGER_MAX_DECAYERS]
             rs.gcount = int((rs.prev_led.get("governor") or {}).get("count", 0)) + 1
-            rs.ledger = {"version": "v35", "data_source": rs.data_source,
+            rs.ledger = {"version": "v36", "data_source": rs.data_source,
                       "governor": {"beta": round(float(GOVERNOR.get("beta", 0.0)), 5),
                                    "lambda": round(float(GOVERNOR.get("lambda", 0.0)), 5),
                                    "width_decay_corr": (round(rs.width_decay_corr, 5)
@@ -10070,7 +10214,7 @@ class ExplorerHarness:
              "No previous cairn was found; ours now stands."),
         ]
         write_chronicle({
-            "title": f"DRW world-explorer v35 ({rs.data_source})",
+            "title": f"DRW world-explorer v36 ({rs.data_source})",
             "features": len(rs.cols), "train_rows": rs.n, "sealed_rows": int(len(rs.sealed_idx)),
             "data_source": rs.data_source, "terrain_pop": rs.t_pop, "weather_pop": rs.w_pop,
             "even_dominant": rs.n_even, "explorer_lines": rs.explorer_lines,
@@ -10175,6 +10319,26 @@ class ExplorerHarness:
             "alarms": int((rs.alarms["status"] == "ALARM").sum()) if not rs.alarms.empty else 0,
         }
         write_json(rs.summary, "explorer_run_summary.json")
+
+        # ---- v36 EXPORT FINDINGS GRAPH: the LLM-readable map of this run's -----
+        # discoveries (laws, research nodes, prediction + feature-topology
+        # communities, interesting regions, anti-fragility, open questions +
+        # the advice schema). Send it OUT-OF-BAND to an LLM / pattern engine;
+        # its advisor_instructions.json feeds the next run. Pure observation.
+        if rs.cfg.EXPORT_FINDINGS:
+            try:
+                rs.findings = build_findings_graph(
+                    rs.library, rs.result, rs.final_weights, rs.summary, GOVERNOR,
+                    getattr(rs, "testlike_info", None), getattr(rs, "topo_df", None),
+                    getattr(rs, "net_summary", None), getattr(rs, "af_df_obj", None), rs.cfg)
+                write_json(rs.findings, "explorer_findings_graph.json")
+                log("findings_graph_exported", research_nodes=len(rs.findings.get("research_nodes", [])),
+                    feature_communities=len(rs.findings.get("feature_topology", [])),
+                    open_questions=len(rs.findings.get("open_questions", [])),
+                    note="send to an LLM/pattern engine -> advisor_instructions.json feeds the next run")
+            except Exception as e:
+                log("findings_graph_skipped", err=str(e)[:100])
+
         META.heartbeat("run_end")
         mem_status("run_end")
         log("run_end", winner=rs.result["winner"],

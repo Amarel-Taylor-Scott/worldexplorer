@@ -286,3 +286,71 @@ def antifragility_report(members: dict[str, np.ndarray], member_lessons: dict,
                      "perturb_width": round(perturb, 4) if np.isfinite(perturb) else None,
                      "antifragility": round(af, 4)})
     return pd.DataFrame(rows).sort_values("antifragility", ascending=False)
+
+
+def build_findings_graph(library, result, final_weights, summary, gov, testlike_info,
+                         topo_df, net_summary, af_df, cfg) -> dict:
+    """v36 EXPLORER FINDINGS GRAPH -- consolidate the run's discoveries into ONE
+    structured, LLM-readable artifact an external model (an LLM / pattern-
+    recognition engine) can reason over: the measured LAWS of this world, the
+    research NODES (the promoted trails), the prediction + feature-topology
+    COMMUNITIES, the interesting REGIONS (agreeing/low-shift vs shift-driving),
+    the anti-fragile members, the shipped blend, and the OPEN QUESTIONS. It also
+    carries the advice SCHEMA so the advisor knows the exact (sacred-rule-safe)
+    response format -- it may shape WHERE/HOW to explore, never labels or the LB.
+    Pure observation; assembling it changes no decision."""
+    laws = {"governor_beta": (gov or {}).get("beta"),
+            "governor_lambda": (gov or {}).get("lambda"),
+            "width_decay_corr": (gov or {}).get("width_decay_corr"),
+            "honest_cv": summary.get("honest_scores", {}).get(summary.get("ensemble_winner")),
+            "forward_blend_corr": summary.get("forward_blend_corr"),
+            "sealed_holdout_corr": summary.get("sealed_holdout_corr"),
+            "cv_forward_gap": (summary.get("anti_decay") or {}).get("cv_forward_gap"),
+            "testlike_auc": (testlike_info or {}).get("auc_holdout"),
+            "doctrine": ("complexity ratchet: every in-working-region signal rewards in-distribution "
+                         "fit, none sees out-of-period decay; sealed cliff ~0.115; testlike AUC=1.0 on "
+                         "DRW => the test set is feature-DISJOINT (out-of-support), so train-internal "
+                         "robustness itself can predict decay")}
+    nodes = []
+    for l in sorted(library.promoted(), key=lesson_fitness, reverse=True)[:40]:
+        nodes.append({"key": l.key, "family": l.family, "skill": l.skill, "transform": l.transform,
+                      "k": int(l.k), "oof_corr": round(float(l.oof_corr), 5),
+                      "wf_corr": round(float(l.wf_corr), 5) if np.isfinite(l.wf_corr) else None,
+                      "width": round(float(l.width), 5) if np.isfinite(l.width) else None,
+                      "decay_oof_minus_wf": (round(float(l.oof_corr - l.wf_corr), 5)
+                                             if np.isfinite(l.wf_corr) else None)})
+    topo = topo_df.to_dict("records") if (topo_df is not None and not topo_df.empty) else []
+    interesting = {}
+    if topo:
+        interesting["agreeing_low_shift_communities"] = [
+            {"community": r["community"], "consensus": r.get("signal_consensus"),
+             "shift": r.get("mean_train_test_shift"), "mean_abs_corr_y": r.get("mean_abs_corr_y")}
+            for r in topo
+            if (r.get("signal_consensus") or 0) >= 0.5
+            and (r.get("mean_train_test_shift") is None or (r.get("mean_train_test_shift") or 0) <= 0.15)][:10]
+    af = af_df.to_dict("records")[:10] if (af_df is not None and not af_df.empty) else []
+    return {
+        "version": "v36", "data_source": summary.get("data_source"),
+        "measured_laws": laws,
+        "research_nodes": nodes,
+        "prediction_communities": net_summary or {},
+        "feature_topology": topo[:30],
+        "interesting_regions": interesting,
+        "antifragility_top": af,
+        "shipped_blend": {"selector": (summary.get("forensics") or {}).get("shipped_selector"),
+                          "weights": final_weights},
+        "open_questions": [
+            "The test set is feature-disjoint (testlike AUC=1.0): which feature COMMUNITIES are most "
+            "likely to carry signal that survives out-of-support? (high consensus + low train->test shift)",
+            "Wide in-sample-robust paths decayed MORE (width_decay_corr>0): what SHAPE of path generalizes "
+            "to a disjoint test -- and how should the wide/narrow mix be tuned?",
+            "Which families/transforms/feature-regions deserve more vs less exploration budget next run?",
+            "Are there relationships between common-topology features the search is under-exploiting?"],
+        "advice_schema": {
+            "_note": "SACRED RULE: shape WHERE/HOW to explore only. Do NOT use labels, the leaderboard, "
+                     "or hidden targets. Suggestions are hypotheses re-measured through the honest doors.",
+            "family_priors": "{family_name: weight in [-1,1]}  (e.g. {'consensus': 1.0, 'shadow': -0.5})",
+            "transform_priors": "{transform_name: weight in [-1,1]}",
+            "skill_priors": "{skill_name: weight in [-1,1]}",
+            "warm_genomes": "['skill|familyK_transform', ...]  hypotheses to seed at evolution gen-0",
+            "notes": "free-text rationale (logged, not executed)"}}

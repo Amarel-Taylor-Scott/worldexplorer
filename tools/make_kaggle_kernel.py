@@ -12,11 +12,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 ENGINE = ROOT / "worldexplorer" / "_engine.py"
-DEFAULT_OUT = ROOT.parent / "kaggle" / "drw_world_explorer_v35" / "kernel.py"
+DEFAULT_OUT = ROOT.parent / "kaggle" / "drw_world_explorer_v36" / "kernel.py"
 
 BANNER = '''\
 # =============================================================================
-# DRW world-explorer v35 -- single-cell Kaggle kernel
+# DRW world-explorer v36 -- single-cell Kaggle kernel
 # (engine built from worldexplorer/engine_src; do not edit here, edit the repo)
 #
 # HOW TO RUN
@@ -99,12 +99,30 @@ BANNER = '''\
 #   - feature_topology_report.csv + antifragility_report.csv: the maps of where
 #     the agreeing, low-shift, stable meaning lives and which members survive a
 #     shifting world (observation; the user can see + steer by them).
+#
+# v36 (THIS BUILD) -- the EXPLORER ADVISOR LOOP (user directive: a graph of the
+# explorers' findings sent to an external model / LLM that feeds exploration
+# guidance back). Doctrine-safe: the advisor shapes WHERE/HOW to look only, never
+# labels or the leaderboard, and every nudge is re-measured through the honest
+# doors (it cannot ship a model or feed the ratchet). OFF == v35 exactly.
+#   - EXPORT: explorer_findings_graph.json -- one LLM-readable artifact with the
+#     measured LAWS, the research NODES (promoted trails), the prediction +
+#     feature-topology COMMUNITIES, the interesting REGIONS (agreeing/low-shift
+#     vs shift-driving), the anti-fragile members, the shipped blend, the OPEN
+#     QUESTIONS, and the advice SCHEMA (the sacred-rule-safe response format).
+#   - INGEST: an optional advisor_instructions.json (produced OUT-OF-BAND by an
+#     LLM reading that graph -- see tools/advisor_stub.py) becomes ADDITIVE
+#     bandit priors (family/transform/skill) + warm genomes at evolution gen-0.
+#   - THE LOOP (offline-safe, Kaggle is Internet-OFF): run -> download findings
+#     graph -> LLM advises out-of-band -> attach advisor_instructions.json as an
+#     input to the next run -> it ingests + MEASURES the advice -> exports again.
+#     The cross-run learning-ledger pattern, now with a human-knowledge advisor.
 # =============================================================================
 '''
 
 OVERRIDES = '''\
 
-# ---- v35 KAGGLE RUN OVERRIDES (the only knobs changed vs library defaults) --
+# ---- v36 KAGGLE RUN OVERRIDES (the only knobs changed vs library defaults) --
 CFG.TIME_BUDGET_MIN = 120.0  # a touch above v33's 90 so the new wide+narrow
                              # menagerie (albatross slot 7, kestrel slot 8, then
                              # the sensory primitives) actually gets airtime past

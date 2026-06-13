@@ -118,6 +118,43 @@ class ExplorerHarness:
         except Exception:
             pass
 
+        # ---- v36 ADVISOR INGEST: read an external model's exploration guidance --
+        # An optional advisor_instructions.json (produced OUT-OF-BAND by an LLM /
+        # pattern-recognition engine reading the previous run's findings graph)
+        # becomes ADDITIVE bandit priors + warm genomes. X-side guidance only --
+        # the schema has no label/LB fields and the harness reads only the allowed
+        # keys, so the sacred rule holds. No file => exact no-op.
+        global ADVISOR, ADVISOR_PRIORS
+        ADVISOR = {}
+        ADVISOR_PRIORS = {}
+        if rs.cfg.ADVISOR_INGEST:
+            try:
+                rs.adv_paths = [Path(p) for p in rs.cfg.ADVISOR_PATHS]
+                try:
+                    rs.adv_paths += list(Path("/kaggle/input").glob("*/advisor_instructions.json"))
+                except Exception:
+                    pass
+                for rs.apth in rs.adv_paths:
+                    if rs.apth.exists():
+                        ADVISOR = json.loads(rs.apth.read_text())
+                        ADVISOR_PRIORS = {"family": dict(ADVISOR.get("family_priors") or {}),
+                                          "transform": dict(ADVISOR.get("transform_priors") or {}),
+                                          "skill": dict(ADVISOR.get("skill_priors") or {})}
+                        for rs.wk in (ADVISOR.get("warm_genomes") or [])[: rs.cfg.ADVISOR_MAX_GENOMES]:
+                            rs.ag = parse_genome_key(rs.wk)
+                            if rs.ag is not None and all(g.key != rs.ag.key for g in SEEDBANK):
+                                SEEDBANK.append(rs.ag)         # advisor hypotheses re-measured at gen-0
+                        log("advisor_ingested", from_file=str(rs.apth),
+                            family_priors=len(ADVISOR_PRIORS["family"]),
+                            transform_priors=len(ADVISOR_PRIORS["transform"]),
+                            skill_priors=len(ADVISOR_PRIORS["skill"]),
+                            warm_genomes=len(ADVISOR.get("warm_genomes") or []),
+                            note=str(ADVISOR.get("notes", ""))[:120])
+                        break
+            except Exception as e:
+                ADVISOR = {}; ADVISOR_PRIORS = {}
+                log("advisor_ingest_skipped", err=str(e)[:80])
+
         def circadian(frac_target: float, tag: str) -> None:
             """v10 governor: the body has a clock. If the elapsed fraction of
             RUN_DEADLINE_MIN exceeds this phase's scheduled fraction, shed
@@ -1309,6 +1346,7 @@ class ExplorerHarness:
             if rs.cfg.ANTIFRAGILITY_REPORT:
                 af_df = antifragility_report(rs.members, rs.member_lessons, rs.yp, rs.segp,
                                              rs.terr_p, rs.wth_p, rs.cfg)
+                rs.af_df_obj = af_df          # v36: kept for the findings-graph export
                 if not af_df.empty:
                     write_csv(af_df, "antifragility_report.csv")
                     log("antifragility", members=len(af_df),
@@ -1729,7 +1767,7 @@ class ExplorerHarness:
             rs.seed_bank.append(rs.l.key)
             if len(rs.seed_bank) >= rs.cfg.SEEDBANK_SIZE:
                 break
-        rs.cairn = {"version": "v35", "data_source": rs.data_source,
+        rs.cairn = {"version": "v36", "data_source": rs.data_source,
                  "gauge_edges": [float(e) for e in (GAUGE.edges if GAUGE is not None else [])],
                  "terrain_populations": rs.t_pop, "weather_populations": rs.w_pop,
                  "even_dominant": rs.n_even, "trap_count": len(TRAPS),
@@ -1751,7 +1789,7 @@ class ExplorerHarness:
                           key=lambda l: -(l.oof_corr - l.wf_corr))
             rs.decayers = list(dict.fromkeys(f"{l.skill}|{l.family}" for l in rs.decj))[: rs.cfg.LEDGER_MAX_DECAYERS]
             rs.gcount = int((rs.prev_led.get("governor") or {}).get("count", 0)) + 1
-            rs.ledger = {"version": "v35", "data_source": rs.data_source,
+            rs.ledger = {"version": "v36", "data_source": rs.data_source,
                       "governor": {"beta": round(float(GOVERNOR.get("beta", 0.0)), 5),
                                    "lambda": round(float(GOVERNOR.get("lambda", 0.0)), 5),
                                    "width_decay_corr": (round(rs.width_decay_corr, 5)
@@ -1869,7 +1907,7 @@ class ExplorerHarness:
              "No previous cairn was found; ours now stands."),
         ]
         write_chronicle({
-            "title": f"DRW world-explorer v35 ({rs.data_source})",
+            "title": f"DRW world-explorer v36 ({rs.data_source})",
             "features": len(rs.cols), "train_rows": rs.n, "sealed_rows": int(len(rs.sealed_idx)),
             "data_source": rs.data_source, "terrain_pop": rs.t_pop, "weather_pop": rs.w_pop,
             "even_dominant": rs.n_even, "explorer_lines": rs.explorer_lines,
@@ -1974,6 +2012,26 @@ class ExplorerHarness:
             "alarms": int((rs.alarms["status"] == "ALARM").sum()) if not rs.alarms.empty else 0,
         }
         write_json(rs.summary, "explorer_run_summary.json")
+
+        # ---- v36 EXPORT FINDINGS GRAPH: the LLM-readable map of this run's -----
+        # discoveries (laws, research nodes, prediction + feature-topology
+        # communities, interesting regions, anti-fragility, open questions +
+        # the advice schema). Send it OUT-OF-BAND to an LLM / pattern engine;
+        # its advisor_instructions.json feeds the next run. Pure observation.
+        if rs.cfg.EXPORT_FINDINGS:
+            try:
+                rs.findings = build_findings_graph(
+                    rs.library, rs.result, rs.final_weights, rs.summary, GOVERNOR,
+                    getattr(rs, "testlike_info", None), getattr(rs, "topo_df", None),
+                    getattr(rs, "net_summary", None), getattr(rs, "af_df_obj", None), rs.cfg)
+                write_json(rs.findings, "explorer_findings_graph.json")
+                log("findings_graph_exported", research_nodes=len(rs.findings.get("research_nodes", [])),
+                    feature_communities=len(rs.findings.get("feature_topology", [])),
+                    open_questions=len(rs.findings.get("open_questions", [])),
+                    note="send to an LLM/pattern engine -> advisor_instructions.json feeds the next run")
+            except Exception as e:
+                log("findings_graph_skipped", err=str(e)[:100])
+
         META.heartbeat("run_end")
         mem_status("run_end")
         log("run_end", winner=rs.result["winner"],

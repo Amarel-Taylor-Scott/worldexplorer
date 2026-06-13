@@ -289,6 +289,15 @@ if CFG.SENSORY_ROSTER:
     EXPLORER_TRAITS[_ins:_ins] = _SENSORY_PERSONAS
 
 
+# v36 ADVISOR LOOP globals: set by the harness from an optional advisor_
+# instructions.json (an external model / LLM's guidance); read by ucb_pick as
+# ADDITIVE exploration priors. Empty => no-op. The advisor never sees labels or
+# the leaderboard and never ships a model -- it only nudges WHERE/HOW to look,
+# and every nudge is still measured through the honest doors.
+ADVISOR: dict = {}              # raw loaded advisor instructions (for the chronicle + report)
+ADVISOR_PRIORS: dict = {}       # {"family": {...}, "transform": {...}, "skill": {...}} lift weights
+
+
 class Explorer:
     def __init__(self, traits: dict[str, Any], cfg: HarnessConfig) -> None:
         self.traits = traits
@@ -385,7 +394,17 @@ class Explorer:
                     if st and int(st.get("n", 0)) >= 2:
                         gen_prior += self.cfg.LEDGER_PRIOR_W * (float(st.get("mean_oof", 0.0))
                                                                - 2.0 * max(0.0, float(st.get("mean_decay", 0.0))))
-            score = prior + social + explore - caution_pen - venom + quorum_lift + recruit + gen_prior
+            # v36 advisor loop: an external model's instructions nudge WHERE/HOW
+            # to look (additive prior on family/transform/skill). Still measured
+            # through the honest doors; empty/off => 0 => no-op.
+            advisor = 0.0
+            if self.cfg.ADVISOR_INGEST and ADVISOR_PRIORS:
+                advisor = self.cfg.ADVISOR_PRIOR_W * (
+                    float(ADVISOR_PRIORS.get("family", {}).get(spec.family, 0.0))
+                    + float(ADVISOR_PRIORS.get("transform", {}).get(spec.transform, 0.0))
+                    + float(ADVISOR_PRIORS.get("skill", {}).get(skill, 0.0)))
+            score = (prior + social + explore - caution_pen - venom + quorum_lift
+                     + recruit + gen_prior + advisor)
             if score > best_score:
                 best, best_score = (skill, spec), score
         return best
