@@ -16,3 +16,6 @@ gov_*/
 v27*/
 explorer_out/
 # NOTE: worldexplorer/_engine.py IS committed (the shipped engine); do not ignore it.
+.env
+*.env
+.git-credentials
