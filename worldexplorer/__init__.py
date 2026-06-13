@@ -16,9 +16,13 @@ and the compute budget. See README.md for the full framework.
 """
 from .adapter import Result, explore
 from .autoconfig import DataProfile, profile
+from . import kaggle                 # thin Kaggle entrypoint: wx.kaggle.run(CONFIG)
 
-__version__ = "0.1.0"
-__all__ = ["explore", "profile", "Result", "DataProfile", "AutoExplorer", "__version__"]
+run_kaggle = kaggle.run              # convenience alias
+
+__version__ = "0.2.0"
+__all__ = ["explore", "profile", "Result", "DataProfile", "AutoExplorer",
+           "kaggle", "run_kaggle", "__version__"]
 
 
 class AutoExplorer:

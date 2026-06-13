@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "worldexplorer"
-version = "0.1.0"
+version = "0.2.0"
 description = "Zero-config, self-improving, overfit-resistant tabular ML: point it at a dataframe + target, it figures out everything else."
 readme = "README.md"
 requires-python = ">=3.9"
