@@ -176,6 +176,37 @@ def stage_viewport_menu(stage_idx: int, max_k: int, n_cols: int) -> list[Viewpor
     return specs
 
 
+if CFG.WIDE_PERSONA:
+    # v33 ALBATROSS (user-directed wide-glider): rides wide, stable, agreeing
+    # signal channels -- consensus skills (vote/bayes/ols/pls), conservative
+    # encodings, stability-bred families. Inserted at roster slot 7 so the
+    # proven first seven personas are untouched; _setup raises N_EXPLORERS to 8.
+    EXPLORER_TRAITS.insert(min(7, len(EXPLORER_TRAITS)), {
+        "name": "albatross", "metaheuristic": "dynamic_soaring_glider", "species": "albatross",
+        "behavior": "wide_path_glider",
+        "curiosity": 0.35, "caution": 0.8, "sociality": 0.7,
+        "skill_prior": {"single_factor": 0.5, "bin_association": 0.3, "majority_vote": 0.95,
+                        "theil_sen": 0.7, "recency_linear": 0.5, "local_interp": 0.1,
+                        "linear_assoc": 0.85, "bagged_linear": 0.9, "residual_ladder": 0.5,
+                        "nonlinear_assoc": 0.2, "mlp_assoc": 0.1, "gbdt_lib": 0.2,
+                        "codebook": 0.4, "terrain_router": 0.5, "steepness_gate": 0.4,
+                        "scout_lattice": 0.6, "relay_caravan": 0.5, "swell_rider": 0.85,
+                        "linear_ols": 0.9, "huber_linear": 0.85, "elastic_net": 0.7,
+                        "pls": 0.9, "bayes_ridge": 0.95, "ard_linear": 0.7, "greedy_ols": 0.8},
+        "transform_prior": {"identity": 0.95, "rank": 0.9, "sign_only": 0.85,
+                            "quantize8": 0.7, "quantize4": 0.8, "quantize2": 0.6,
+                            "pca": 0.6, "pair_aug": 0.2, "rand_proj": 0.2,
+                            "signed_hadamard": 0.1, "pca_aug": 0.3, "foveated": 0.3,
+                            "fold_abs": 0.4, "fold_pairs": 0.2, "dual_exposure": 0.6,
+                            "doppler": 0.4, "tide": 0.5, "moire": 0.3},
+        "family_prior": {"top": 0.7, "anon": 0.6, "market": 0.4, "decor": 0.8,
+                         "stable": 0.95, "medoid": 0.8, "lastN": 0.5, "dawn": 0.4,
+                         "both_clocks": 0.9, "terrain": 0.6, "weather": 0.8,
+                         "mycelium": 0.5, "shadow": 0.1, "periphery": 0.2,
+                         "invariant": 0.95, "sign_stability": 0.95, "irm": 0.8,
+                         "stabsel": 0.85, "pls_weight": 0.85, "tail": 0.8}})
+
+
 class Explorer:
     def __init__(self, traits: dict[str, Any], cfg: HarnessConfig) -> None:
         self.traits = traits

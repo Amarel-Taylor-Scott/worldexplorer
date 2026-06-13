@@ -394,6 +394,28 @@ class HarnessConfig:
     FACTOR_NEUTRAL_FRACS: tuple[float, ...] = (0.25, 0.5, 1.0)   # neutralization fractions auditioned on forward
     ROOMTRANS_FAMILY: bool = True      # 'room_transition' ranker family (signal at regime boundaries)
 
+    # v33 WIDE-CONFIGURATION GRID (user-directed): a hyper-parameter GRID of
+    # shipping configurations layered on the robust court. Each grid point
+    # composes a candidate blend from the measured pool under a different
+    # preference -- very-WIDE signal channels (robust width), channels that
+    # AGREE more often (mean |corr| to the rest), STABLE features (low noise
+    # sensitivity + stability-bred families), or raw sharpness as the control.
+    # Pure selection (zero capacity); every grid point is judged across all
+    # robust partitions with the governor penalty + deflation bar.
+    CONFIG_GRID: bool = True           # add grid_* candidate configs to the robust court
+    CONFIG_GRID_TOPK: int = 8          # members per grid config (equal-weighted)
+    WIDE_SEEDS: bool = True            # wide/stable/agreeing warm genomes at evolution gen-0
+    WIDE_PERSONA: bool = True          # 'albatross' wide-glider joins the phase-1 roster (8th slot)
+    WIDE_WARM_GENOMES: tuple[str, ...] = (
+        "majority_vote|sign_stability24_identity",   # the agreement primitive on sign-stable features
+        "majority_vote|invariant24_sign_only",       # pure vote, environment-invariant features
+        "bayes_ridge|sign_stability64_identity",     # evidence-tuned ridge on sign-stable block
+        "linear_ols|sign_stability50_identity",      # plain OLS on sign-stable block
+        "pls|sign_stability64_identity",             # supervised SVD on sign-stable block
+        "bagged_linear|invariant64_quantize4",       # strided bagging on invariant features
+        "swell_rider|stable33_quantize4",            # smoothed label on temporally-stable features
+    )
+
     # v30.1 WINNER NETWORK (observation only, IDEAS.md 1a): the promoted trails
     # as a graph -- output-corr edges, leader-cluster communities. Feeds the
     # queued network-aware member-selection cap (1b) with measurements first.

@@ -308,3 +308,55 @@ def robust_oos_select(cand_weights, members, member_lessons, spec_lookup,
         return out
 
 
+
+def config_grid_candidates(members: dict, member_lessons: dict, cfg) -> dict[str, dict[str, float]]:
+    """v33 WIDE-CONFIGURATION GRID (user-directed hyper-search layer): each
+    grid point composes a candidate blend from the MEASURED pool under a
+    different preference -- very-WIDE signal channels (robust lower-bound
+    width), channels that AGREE more often (mean |corr| to the rest of the
+    pool), STABLE features (low noise sensitivity, stability-bred families),
+    or raw sharpness as the greedy control. Pure selection, zero capacity:
+    every grid config faces the same robust court (all partitions, governor
+    complexity penalty, deflation bar) and ships only if it wins there."""
+    nms = [nm for nm in members if np.isfinite(member_lessons[nm].oof_corr)]
+    if len(nms) < 3:
+        return {}
+    M = np.vstack([np.asarray(members[nm], np.float64) for nm in nms])
+    C = np.abs(np.nan_to_num(np.corrcoef(M), nan=0.0))
+    np.fill_diagonal(C, 0.0)
+
+    def z(v):
+        v = np.asarray(v, np.float64)
+        return (v - v.mean()) / (v.std() + 1e-12)
+
+    width = z([min(member_lessons[nm].width,
+                   member_lessons[nm].wf_width if np.isfinite(member_lessons[nm].wf_width)
+                   else member_lessons[nm].width)
+               if np.isfinite(member_lessons[nm].width) else 0.0 for nm in nms])
+    agree = z(C.mean(axis=1))
+    stab = z([-(member_lessons[nm].stability if np.isfinite(member_lessons[nm].stability) else 1.0)
+              + (0.5 if member_lessons[nm].family in
+                 ("stable", "invariant", "sign_stability", "irm") else 0.0)
+              for nm in nms])
+    corr = z([member_lessons[nm].oof_corr for nm in nms])
+    axes = {"width": width, "agree": agree, "stable": stab, "corr": corr}
+    GRID = [("grid_wide",         {"width": 1.0}),
+            ("grid_agree",        {"agree": 1.0}),
+            ("grid_stable",       {"stable": 1.0}),
+            ("grid_wide_agree",   {"width": 0.5, "agree": 0.5}),
+            ("grid_wide_stable",  {"width": 0.5, "stable": 0.5}),
+            ("grid_agree_stable", {"agree": 0.5, "stable": 0.5}),
+            ("grid_wide_all",     {"width": 0.4, "agree": 0.3, "stable": 0.3}),
+            ("grid_sharp",        {"corr": 1.0})]
+    k = max(2, min(int(cfg.CONFIG_GRID_TOPK), len(nms)))
+    out: dict[str, dict[str, float]] = {}
+    seen: set = set()
+    for gname, prefs in GRID:
+        score = sum(wt * axes[ax] for ax, wt in prefs.items())
+        top = [nms[i] for i in np.argsort(-score, kind="stable")[:k]]
+        key = tuple(sorted(top))
+        if key in seen:                      # identical member sets collapse
+            continue
+        seen.add(key)
+        out[gname] = {nm: 1.0 / len(top) for nm in top}
+    return out

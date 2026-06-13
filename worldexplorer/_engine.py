@@ -1489,6 +1489,28 @@ class HarnessConfig:
     FACTOR_NEUTRAL_FRACS: tuple[float, ...] = (0.25, 0.5, 1.0)   # neutralization fractions auditioned on forward
     ROOMTRANS_FAMILY: bool = True      # 'room_transition' ranker family (signal at regime boundaries)
 
+    # v33 WIDE-CONFIGURATION GRID (user-directed): a hyper-parameter GRID of
+    # shipping configurations layered on the robust court. Each grid point
+    # composes a candidate blend from the measured pool under a different
+    # preference -- very-WIDE signal channels (robust width), channels that
+    # AGREE more often (mean |corr| to the rest), STABLE features (low noise
+    # sensitivity + stability-bred families), or raw sharpness as the control.
+    # Pure selection (zero capacity); every grid point is judged across all
+    # robust partitions with the governor penalty + deflation bar.
+    CONFIG_GRID: bool = True           # add grid_* candidate configs to the robust court
+    CONFIG_GRID_TOPK: int = 8          # members per grid config (equal-weighted)
+    WIDE_SEEDS: bool = True            # wide/stable/agreeing warm genomes at evolution gen-0
+    WIDE_PERSONA: bool = True          # 'albatross' wide-glider joins the phase-1 roster (8th slot)
+    WIDE_WARM_GENOMES: tuple[str, ...] = (
+        "majority_vote|sign_stability24_identity",   # the agreement primitive on sign-stable features
+        "majority_vote|invariant24_sign_only",       # pure vote, environment-invariant features
+        "bayes_ridge|sign_stability64_identity",     # evidence-tuned ridge on sign-stable block
+        "linear_ols|sign_stability50_identity",      # plain OLS on sign-stable block
+        "pls|sign_stability64_identity",             # supervised SVD on sign-stable block
+        "bagged_linear|invariant64_quantize4",       # strided bagging on invariant features
+        "swell_rider|stable33_quantize4",            # smoothed label on temporally-stable features
+    )
+
     # v30.1 WINNER NETWORK (observation only, IDEAS.md 1a): the promoted trails
     # as a graph -- output-corr edges, leader-cluster communities. Feeds the
     # queued network-aware member-selection cap (1b) with measurements first.
@@ -5075,6 +5097,37 @@ def stage_viewport_menu(stage_idx: int, max_k: int, n_cols: int) -> list[Viewpor
     return specs
 
 
+if CFG.WIDE_PERSONA:
+    # v33 ALBATROSS (user-directed wide-glider): rides wide, stable, agreeing
+    # signal channels -- consensus skills (vote/bayes/ols/pls), conservative
+    # encodings, stability-bred families. Inserted at roster slot 7 so the
+    # proven first seven personas are untouched; _setup raises N_EXPLORERS to 8.
+    EXPLORER_TRAITS.insert(min(7, len(EXPLORER_TRAITS)), {
+        "name": "albatross", "metaheuristic": "dynamic_soaring_glider", "species": "albatross",
+        "behavior": "wide_path_glider",
+        "curiosity": 0.35, "caution": 0.8, "sociality": 0.7,
+        "skill_prior": {"single_factor": 0.5, "bin_association": 0.3, "majority_vote": 0.95,
+                        "theil_sen": 0.7, "recency_linear": 0.5, "local_interp": 0.1,
+                        "linear_assoc": 0.85, "bagged_linear": 0.9, "residual_ladder": 0.5,
+                        "nonlinear_assoc": 0.2, "mlp_assoc": 0.1, "gbdt_lib": 0.2,
+                        "codebook": 0.4, "terrain_router": 0.5, "steepness_gate": 0.4,
+                        "scout_lattice": 0.6, "relay_caravan": 0.5, "swell_rider": 0.85,
+                        "linear_ols": 0.9, "huber_linear": 0.85, "elastic_net": 0.7,
+                        "pls": 0.9, "bayes_ridge": 0.95, "ard_linear": 0.7, "greedy_ols": 0.8},
+        "transform_prior": {"identity": 0.95, "rank": 0.9, "sign_only": 0.85,
+                            "quantize8": 0.7, "quantize4": 0.8, "quantize2": 0.6,
+                            "pca": 0.6, "pair_aug": 0.2, "rand_proj": 0.2,
+                            "signed_hadamard": 0.1, "pca_aug": 0.3, "foveated": 0.3,
+                            "fold_abs": 0.4, "fold_pairs": 0.2, "dual_exposure": 0.6,
+                            "doppler": 0.4, "tide": 0.5, "moire": 0.3},
+        "family_prior": {"top": 0.7, "anon": 0.6, "market": 0.4, "decor": 0.8,
+                         "stable": 0.95, "medoid": 0.8, "lastN": 0.5, "dawn": 0.4,
+                         "both_clocks": 0.9, "terrain": 0.6, "weather": 0.8,
+                         "mycelium": 0.5, "shadow": 0.1, "periphery": 0.2,
+                         "invariant": 0.95, "sign_stability": 0.95, "irm": 0.8,
+                         "stabsel": 0.85, "pls_weight": 0.85, "tail": 0.8}})
+
+
 class Explorer:
     def __init__(self, traits: dict[str, Any], cfg: HarnessConfig) -> None:
         self.traits = traits
@@ -5513,6 +5566,10 @@ class EvolutionEngine:
                 # v14 seed bank: a prior run's measured LOSERS germinate first
                 # (temporal biodiversity -- the diversity a regime shift rewards)
                 warm_keys = list(cfg.WARM_GENOMES)
+                if getattr(cfg, "WIDE_SEEDS", False):
+                    # v33 wide seeds (user-directed): wide/stable/agreeing
+                    # motifs measured through the same gen-0 doors
+                    warm_keys += [k for k in cfg.WIDE_WARM_GENOMES if k not in warm_keys]
                 germ = [g.key for g in SEEDBANK[: self.cfg.SEED_GERMINATE]] if self.epoch == 0 else []
                 if germ:
                     warm_keys = germ + warm_keys
@@ -7389,6 +7446,58 @@ def robust_oos_select(cand_weights, members, member_lessons, spec_lookup,
         return out
 
 
+
+def config_grid_candidates(members: dict, member_lessons: dict, cfg) -> dict[str, dict[str, float]]:
+    """v33 WIDE-CONFIGURATION GRID (user-directed hyper-search layer): each
+    grid point composes a candidate blend from the MEASURED pool under a
+    different preference -- very-WIDE signal channels (robust lower-bound
+    width), channels that AGREE more often (mean |corr| to the rest of the
+    pool), STABLE features (low noise sensitivity, stability-bred families),
+    or raw sharpness as the greedy control. Pure selection, zero capacity:
+    every grid config faces the same robust court (all partitions, governor
+    complexity penalty, deflation bar) and ships only if it wins there."""
+    nms = [nm for nm in members if np.isfinite(member_lessons[nm].oof_corr)]
+    if len(nms) < 3:
+        return {}
+    M = np.vstack([np.asarray(members[nm], np.float64) for nm in nms])
+    C = np.abs(np.nan_to_num(np.corrcoef(M), nan=0.0))
+    np.fill_diagonal(C, 0.0)
+
+    def z(v):
+        v = np.asarray(v, np.float64)
+        return (v - v.mean()) / (v.std() + 1e-12)
+
+    width = z([min(member_lessons[nm].width,
+                   member_lessons[nm].wf_width if np.isfinite(member_lessons[nm].wf_width)
+                   else member_lessons[nm].width)
+               if np.isfinite(member_lessons[nm].width) else 0.0 for nm in nms])
+    agree = z(C.mean(axis=1))
+    stab = z([-(member_lessons[nm].stability if np.isfinite(member_lessons[nm].stability) else 1.0)
+              + (0.5 if member_lessons[nm].family in
+                 ("stable", "invariant", "sign_stability", "irm") else 0.0)
+              for nm in nms])
+    corr = z([member_lessons[nm].oof_corr for nm in nms])
+    axes = {"width": width, "agree": agree, "stable": stab, "corr": corr}
+    GRID = [("grid_wide",         {"width": 1.0}),
+            ("grid_agree",        {"agree": 1.0}),
+            ("grid_stable",       {"stable": 1.0}),
+            ("grid_wide_agree",   {"width": 0.5, "agree": 0.5}),
+            ("grid_wide_stable",  {"width": 0.5, "stable": 0.5}),
+            ("grid_agree_stable", {"agree": 0.5, "stable": 0.5}),
+            ("grid_wide_all",     {"width": 0.4, "agree": 0.3, "stable": 0.3}),
+            ("grid_sharp",        {"corr": 1.0})]
+    k = max(2, min(int(cfg.CONFIG_GRID_TOPK), len(nms)))
+    out: dict[str, dict[str, float]] = {}
+    seen: set = set()
+    for gname, prefs in GRID:
+        score = sum(wt * axes[ax] for ax, wt in prefs.items())
+        top = [nms[i] for i in np.argsort(-score, kind="stable")[:k]]
+        key = tuple(sorted(top))
+        if key in seen:                      # identical member sets collapse
+            continue
+        seen.add(key)
+        out[gname] = {nm: 1.0 / len(top) for nm in top}
+    return out
 def forensic_regime_science(members, member_lessons, spec_lookup, w0, is_median0, weather_states0,
                             incumbent_fwd_corr, fwd_parts, yp, segp, terr_p, wth_p, volp,
                             X_full, y_full, seg_full, n_work, cols, past, future, cfg):
@@ -7626,6 +7735,19 @@ def forensic_regime_science(members, member_lessons, spec_lookup, w0, is_median0
                             key=lambda nm: gov_cmap.get(nm, 1.0))[:max(cfg.MIN_BLEND_MEMBERS, 6)]
             if len(simple) >= 2:
                 cand_weights["complexity_anchor"] = {nm: 1.0 / len(simple) for nm in simple}
+        # v33 WIDE-CONFIGURATION GRID (user-directed): grid_* preference
+        # configs -- wide / agreeing / stable channel compositions vs the
+        # sharp greedy control, all judged by the same court below.
+        if getattr(cfg, "CONFIG_GRID", False):
+            try:
+                grid_cands = config_grid_candidates(members, member_lessons, cfg)
+                cand_weights.update(grid_cands)
+                if grid_cands:
+                    log("config_grid", configs=len(grid_cands),
+                        names="|".join(grid_cands),
+                        note="preference grid over the measured pool; the robust court arbitrates")
+            except Exception as e:
+                log("config_grid_skipped", err=str(e)[:80])
 
         if cfg.ROBUST_OOS_SELECT:
             robust = robust_oos_select(cand_weights, members, member_lessons, spec_lookup,
@@ -7732,6 +7854,8 @@ class ExplorerHarness:
         RED_MYCELIUM.clear()             # fresh repellent channel (v14)
         GOVERNOR.clear()                 # v27: fresh runtime complexity-generalization governor
         WIDTH_BIAS["n"] = 0              # v30: fresh wide-path annealing clock
+        if rs.cfg.WIDE_PERSONA:          # v33: the albatross occupies roster slot 7
+            rs.cfg.N_EXPLORERS = max(rs.cfg.N_EXPLORERS, 8)
         LEDGER_PRIOR.clear()             # v27: fresh cross-run learning ledger (repopulated from prior cairn below)
         global FCLUST, HABITAT
         FCLUST = None; HABITAT = None; QUARANTINE.clear()   # fresh forensic sensors (v21)
@@ -9336,7 +9460,7 @@ class ExplorerHarness:
             rs.seed_bank.append(rs.l.key)
             if len(rs.seed_bank) >= rs.cfg.SEEDBANK_SIZE:
                 break
-        rs.cairn = {"version": "v32", "data_source": rs.data_source,
+        rs.cairn = {"version": "v33", "data_source": rs.data_source,
                  "gauge_edges": [float(e) for e in (GAUGE.edges if GAUGE is not None else [])],
                  "terrain_populations": rs.t_pop, "weather_populations": rs.w_pop,
                  "even_dominant": rs.n_even, "trap_count": len(TRAPS),
@@ -9358,7 +9482,7 @@ class ExplorerHarness:
                           key=lambda l: -(l.oof_corr - l.wf_corr))
             rs.decayers = list(dict.fromkeys(f"{l.skill}|{l.family}" for l in rs.decj))[: rs.cfg.LEDGER_MAX_DECAYERS]
             rs.gcount = int((rs.prev_led.get("governor") or {}).get("count", 0)) + 1
-            rs.ledger = {"version": "v32", "data_source": rs.data_source,
+            rs.ledger = {"version": "v33", "data_source": rs.data_source,
                       "governor": {"beta": round(float(GOVERNOR.get("beta", 0.0)), 5),
                                    "lambda": round(float(GOVERNOR.get("lambda", 0.0)), 5),
                                    "width_decay_corr": (round(rs.width_decay_corr, 5)
@@ -9476,7 +9600,7 @@ class ExplorerHarness:
              "No previous cairn was found; ours now stands."),
         ]
         write_chronicle({
-            "title": f"DRW world-explorer v32 ({rs.data_source})",
+            "title": f"DRW world-explorer v33 ({rs.data_source})",
             "features": len(rs.cols), "train_rows": rs.n, "sealed_rows": int(len(rs.sealed_idx)),
             "data_source": rs.data_source, "terrain_pop": rs.t_pop, "weather_pop": rs.w_pop,
             "even_dominant": rs.n_even, "explorer_lines": rs.explorer_lines,

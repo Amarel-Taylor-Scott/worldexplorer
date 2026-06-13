@@ -326,6 +326,10 @@ class EvolutionEngine:
                 # v14 seed bank: a prior run's measured LOSERS germinate first
                 # (temporal biodiversity -- the diversity a regime shift rewards)
                 warm_keys = list(cfg.WARM_GENOMES)
+                if getattr(cfg, "WIDE_SEEDS", False):
+                    # v33 wide seeds (user-directed): wide/stable/agreeing
+                    # motifs measured through the same gen-0 doors
+                    warm_keys += [k for k in cfg.WIDE_WARM_GENOMES if k not in warm_keys]
                 germ = [g.key for g in SEEDBANK[: self.cfg.SEED_GERMINATE]] if self.epoch == 0 else []
                 if germ:
                     warm_keys = germ + warm_keys

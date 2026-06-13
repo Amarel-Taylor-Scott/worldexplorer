@@ -52,6 +52,8 @@ class ExplorerHarness:
         RED_MYCELIUM.clear()             # fresh repellent channel (v14)
         GOVERNOR.clear()                 # v27: fresh runtime complexity-generalization governor
         WIDTH_BIAS["n"] = 0              # v30: fresh wide-path annealing clock
+        if rs.cfg.WIDE_PERSONA:          # v33: the albatross occupies roster slot 7
+            rs.cfg.N_EXPLORERS = max(rs.cfg.N_EXPLORERS, 8)
         LEDGER_PRIOR.clear()             # v27: fresh cross-run learning ledger (repopulated from prior cairn below)
         global FCLUST, HABITAT
         FCLUST = None; HABITAT = None; QUARANTINE.clear()   # fresh forensic sensors (v21)
@@ -1656,7 +1658,7 @@ class ExplorerHarness:
             rs.seed_bank.append(rs.l.key)
             if len(rs.seed_bank) >= rs.cfg.SEEDBANK_SIZE:
                 break
-        rs.cairn = {"version": "v32", "data_source": rs.data_source,
+        rs.cairn = {"version": "v33", "data_source": rs.data_source,
                  "gauge_edges": [float(e) for e in (GAUGE.edges if GAUGE is not None else [])],
                  "terrain_populations": rs.t_pop, "weather_populations": rs.w_pop,
                  "even_dominant": rs.n_even, "trap_count": len(TRAPS),
@@ -1678,7 +1680,7 @@ class ExplorerHarness:
                           key=lambda l: -(l.oof_corr - l.wf_corr))
             rs.decayers = list(dict.fromkeys(f"{l.skill}|{l.family}" for l in rs.decj))[: rs.cfg.LEDGER_MAX_DECAYERS]
             rs.gcount = int((rs.prev_led.get("governor") or {}).get("count", 0)) + 1
-            rs.ledger = {"version": "v32", "data_source": rs.data_source,
+            rs.ledger = {"version": "v33", "data_source": rs.data_source,
                       "governor": {"beta": round(float(GOVERNOR.get("beta", 0.0)), 5),
                                    "lambda": round(float(GOVERNOR.get("lambda", 0.0)), 5),
                                    "width_decay_corr": (round(rs.width_decay_corr, 5)
@@ -1796,7 +1798,7 @@ class ExplorerHarness:
              "No previous cairn was found; ours now stands."),
         ]
         write_chronicle({
-            "title": f"DRW world-explorer v32 ({rs.data_source})",
+            "title": f"DRW world-explorer v33 ({rs.data_source})",
             "features": len(rs.cols), "train_rows": rs.n, "sealed_rows": int(len(rs.sealed_idx)),
             "data_source": rs.data_source, "terrain_pop": rs.t_pop, "weather_pop": rs.w_pop,
             "even_dominant": rs.n_even, "explorer_lines": rs.explorer_lines,

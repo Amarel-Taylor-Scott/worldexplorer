@@ -235,6 +235,19 @@ def forensic_regime_science(members, member_lessons, spec_lookup, w0, is_median0
                             key=lambda nm: gov_cmap.get(nm, 1.0))[:max(cfg.MIN_BLEND_MEMBERS, 6)]
             if len(simple) >= 2:
                 cand_weights["complexity_anchor"] = {nm: 1.0 / len(simple) for nm in simple}
+        # v33 WIDE-CONFIGURATION GRID (user-directed): grid_* preference
+        # configs -- wide / agreeing / stable channel compositions vs the
+        # sharp greedy control, all judged by the same court below.
+        if getattr(cfg, "CONFIG_GRID", False):
+            try:
+                grid_cands = config_grid_candidates(members, member_lessons, cfg)
+                cand_weights.update(grid_cands)
+                if grid_cands:
+                    log("config_grid", configs=len(grid_cands),
+                        names="|".join(grid_cands),
+                        note="preference grid over the measured pool; the robust court arbitrates")
+            except Exception as e:
+                log("config_grid_skipped", err=str(e)[:80])
 
         if cfg.ROBUST_OOS_SELECT:
             robust = robust_oos_select(cand_weights, members, member_lessons, spec_lookup,
