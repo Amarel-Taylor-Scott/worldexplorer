@@ -49,17 +49,25 @@ class Lesson:
 
 # v30: the wide-path annealing clock -- lessons measured so far this run
 # (reset by the harness at run start; advanced by SharedLibrary.add).
-WIDTH_BIAS = {"n": 0}
+# v34: WIDTH_BIAS["target"] is the share the anneal converges TO -- 0.5 by
+# default (= v30/v33), set lower/higher by the harness from the ledger's
+# measured width_decay_corr (self-tuning the wide/narrow lean from evidence).
+WIDTH_BIAS = {"n": 0, "target": 0.5}
 
 
 def width_share() -> float:
-    """v30: the search currency's WIDTH share. Starts at WIDTH_BIAS_START
+    """v30/v34: the search currency's WIDTH share. Starts at WIDTH_BIAS_START
     (initial bias toward WIDE paths -- robust lower-bound strength over raw
-    corr) and anneals with a half-life in LESSONS toward the v4 0.5 balance.
-    0.5 = exact historical no-op; the bias shapes the EARLY trajectory only."""
+    corr) and anneals with a half-life in LESSONS toward WIDTH_BIAS['target'].
+    v34: the target is no longer fixed at 0.5 -- the harness sets it from the
+    ledger's MEASURED width_decay_corr, so the run self-tunes its wide/narrow
+    lean from evidence (target<0.5 = lean sharp late, >0.5 = lean wide). The
+    START always wins early, so a self-tuned sharp lean is a LATE-run correction
+    that NEVER reverts the wide bias. target=0.5 = exact v30/v33 behaviour."""
     start = float(getattr(CFG, "WIDTH_BIAS_START", 0.5))
     hl = max(1.0, float(getattr(CFG, "WIDTH_BIAS_HALFLIFE", 60)))
-    return 0.5 + (start - 0.5) * (0.5 ** (WIDTH_BIAS["n"] / hl))
+    target = float(WIDTH_BIAS.get("target", 0.5))
+    return target + (start - target) * (0.5 ** (WIDTH_BIAS["n"] / hl))
 
 
 def width_bias_beta() -> float:

@@ -1511,6 +1511,40 @@ class HarnessConfig:
         "swell_rider|stable33_quantize4",            # smoothed label on temporally-stable features
     )
 
+    # v34 SELF-TUNING WIDTH + WIDE/NARROW MIX (user-directed: "do not revert or
+    # remove anything -- the system should tune itself; maybe a MIX of wide and
+    # short paths"). NOTHING from v30/v33 is removed: the wide bias stays fully
+    # capable. Two self-tuning additions, both no-op-safe:
+    #   * SENSORY_ROSTER also activates a per-explorer WIDTH_PREF (read in
+    #     ucb_pick): different personas carry different wide<->narrow preferences,
+    #     so a SINGLE run explores wide robust trails AND narrow sharp ridgelines
+    #     at once -- the mix. OFF (or pref 0.5) = exact v33.
+    #   * WIDTH_SELF_TUNE: the global width TARGET the share anneals toward is no
+    #     longer fixed at 0.5 -- it is set from the ledger's MEASURED
+    #     width_decay_corr (evidence-shrunk). width_decay_corr>0 (wide decayed
+    #     more, as DRW measured +0.26) LOWERS the target so the population leans
+    #     sharper LATER in the run; <0 RAISES it (lean wider). The START stays
+    #     WIDTH_BIAS_START, so early exploration is still wide -- this is a
+    #     self-correcting late-run lean from evidence, NOT a revert. No prior
+    #     ledger => target 0.5 => exact v33. (Attach the v33 output and it reads
+    #     the measured +0.2574 and leans sharp on its own.)
+    WIDTH_SELF_TUNE: bool = True
+    WIDTH_SELF_TUNE_GAIN: float = 1.5   # target = clip(0.5 - gain*shrunk(width_decay_corr), MIN, MAX)
+    WIDTH_TARGET_MIN: float = 0.2       # floor on the annealed target (never fully abandon width)
+    WIDTH_TARGET_MAX: float = 0.8       # ceiling (never exceed the wide end)
+
+    # v34 SENSORY MENAGERIE (user-directed: "more explorer primitives with
+    # different functionalities and ways of looking at their surroundings"). Six
+    # new personas, each a DISTINCT point on the narrow<->wide axis (so the
+    # population mixes both) AND a DISTINCT sense (family/transform priors = how
+    # it looks at the world): kestrel (narrow sharp stoop), mantis_shrimp (many
+    # spectral channels), owl (quiet/low-signal regions), bloodhound (faint
+    # persistent scent), spider (feature-selection web), octopus (independent
+    # multi-transform arms). Roster-only + N_EXPLORERS auto-bump + activates
+    # width_pref; OFF => v33 roster + behaviour exactly. The metabolism gates how
+    # many actually run, so raising TIME_BUDGET_MIN gives the menagerie airtime.
+    SENSORY_ROSTER: bool = True
+
     # v30.1 WINNER NETWORK (observation only, IDEAS.md 1a): the promoted trails
     # as a graph -- output-corr edges, leader-cluster communities. Feeds the
     # queued network-aware member-selection cap (1b) with measurements first.
@@ -4640,17 +4674,25 @@ class Lesson:
 
 # v30: the wide-path annealing clock -- lessons measured so far this run
 # (reset by the harness at run start; advanced by SharedLibrary.add).
-WIDTH_BIAS = {"n": 0}
+# v34: WIDTH_BIAS["target"] is the share the anneal converges TO -- 0.5 by
+# default (= v30/v33), set lower/higher by the harness from the ledger's
+# measured width_decay_corr (self-tuning the wide/narrow lean from evidence).
+WIDTH_BIAS = {"n": 0, "target": 0.5}
 
 
 def width_share() -> float:
-    """v30: the search currency's WIDTH share. Starts at WIDTH_BIAS_START
+    """v30/v34: the search currency's WIDTH share. Starts at WIDTH_BIAS_START
     (initial bias toward WIDE paths -- robust lower-bound strength over raw
-    corr) and anneals with a half-life in LESSONS toward the v4 0.5 balance.
-    0.5 = exact historical no-op; the bias shapes the EARLY trajectory only."""
+    corr) and anneals with a half-life in LESSONS toward WIDTH_BIAS['target'].
+    v34: the target is no longer fixed at 0.5 -- the harness sets it from the
+    ledger's MEASURED width_decay_corr, so the run self-tunes its wide/narrow
+    lean from evidence (target<0.5 = lean sharp late, >0.5 = lean wide). The
+    START always wins early, so a self-tuned sharp lean is a LATE-run correction
+    that NEVER reverts the wide bias. target=0.5 = exact v30/v33 behaviour."""
     start = float(getattr(CFG, "WIDTH_BIAS_START", 0.5))
     hl = max(1.0, float(getattr(CFG, "WIDTH_BIAS_HALFLIFE", 60)))
-    return 0.5 + (start - 0.5) * (0.5 ** (WIDTH_BIAS["n"] / hl))
+    target = float(WIDTH_BIAS.get("target", 0.5))
+    return target + (start - target) * (0.5 ** (WIDTH_BIAS["n"] / hl))
 
 
 def width_bias_beta() -> float:
@@ -5104,7 +5146,7 @@ if CFG.WIDE_PERSONA:
     # proven first seven personas are untouched; _setup raises N_EXPLORERS to 8.
     EXPLORER_TRAITS.insert(min(7, len(EXPLORER_TRAITS)), {
         "name": "albatross", "metaheuristic": "dynamic_soaring_glider", "species": "albatross",
-        "behavior": "wide_path_glider",
+        "behavior": "wide_path_glider", "width_pref": 0.9,   # v34: leans WIDE (robust width)
         "curiosity": 0.35, "caution": 0.8, "sociality": 0.7,
         "skill_prior": {"single_factor": 0.5, "bin_association": 0.3, "majority_vote": 0.95,
                         "theil_sen": 0.7, "recency_linear": 0.5, "local_interp": 0.1,
@@ -5126,6 +5168,88 @@ if CFG.WIDE_PERSONA:
                          "mycelium": 0.5, "shadow": 0.1, "periphery": 0.2,
                          "invariant": 0.95, "sign_stability": 0.95, "irm": 0.8,
                          "stabsel": 0.85, "pls_weight": 0.85, "tail": 0.8}})
+
+if CFG.SENSORY_ROSTER:
+    # v34 SENSORY MENAGERIE (user-directed: "more explorer primitives with
+    # different functionalities and ways of looking at their surroundings").
+    # Each persona is a DIFFERENT point on the narrow<->wide axis (width_pref,
+    # so one run mixes both) AND a DIFFERENT sense (sparse family/transform
+    # priors; .get default 0.5 leaves the rest neutral). Appended after the
+    # proven roster + albatross; _setup bumps N_EXPLORERS so they run when the
+    # metabolism has airtime. SENSORY_ROSTER off => this whole block is skipped.
+    # Spliced in right AFTER the albatross (not appended) so the wide<->narrow
+    # spread gets airtime ahead of the older v11 menagerie tail at light budgets.
+    _SENSORY_PERSONAS = [
+        # KESTREL -- the NARROW counterpart to the wide albatross: a sharp stoop
+        # on ONE tiny high-corr target (narrow lucky ridgelines, not robust width)
+        {"name": "kestrel", "metaheuristic": "stooping_hunter", "species": "kestrel",
+         "behavior": "narrow_sharp_stoop", "width_pref": 0.1,
+         "curiosity": 0.4, "caution": 0.3, "sociality": 0.4,
+         "skill_prior": {"single_factor": 0.95, "theil_sen": 0.9, "greedy_ols": 0.9,
+                         "linear_ols": 0.85, "majority_vote": 0.6, "bin_association": 0.5,
+                         "mlp_assoc": 0.1, "gbdt_lib": 0.2, "nonlinear_assoc": 0.2},
+         "transform_prior": {"identity": 0.8, "sign_only": 0.9, "quantize2": 0.85,
+                             "rank": 0.7, "quantize4": 0.6},
+         "family_prior": {"top": 0.95, "tail": 0.85, "medoid": 0.8, "decor": 0.7,
+                          "sign_stability": 0.8, "shadow": 0.1}},
+        # MANTIS_SHRIMP -- twelve-channel spectral vision: reads many SPECTRAL
+        # BANDS of the same feature at once (prism/moire/dual/lateral/fractal/RD)
+        {"name": "mantis_shrimp", "metaheuristic": "spectral_multichannel", "species": "mantis_shrimp",
+         "behavior": "many_band_vision", "width_pref": 0.5,
+         "curiosity": 0.85, "caution": 0.3, "sociality": 0.4,
+         "skill_prior": {"linear_assoc": 0.8, "bagged_linear": 0.8, "scout_lattice": 0.8,
+                         "rapids": 0.75, "terrace": 0.7},
+         "transform_prior": {"prism": 0.95, "moire": 0.9, "dual_exposure": 0.9,
+                             "lateral_line": 0.85, "fractal": 0.8, "reaction_diffusion": 0.8,
+                             "curvature": 0.7, "identity": 0.4},
+         "family_prior": {"top": 0.6, "anon": 0.6, "decor": 0.7, "medoid": 0.7,
+                          "weather": 0.7, "terrain": 0.6}},
+        # OWL -- nocturnal: hunts the QUIET regions everyone else ignores
+        # (shadow/periphery/fault) -- low-signal, high-variance negative space
+        {"name": "owl", "metaheuristic": "silent_night_hunter", "species": "owl",
+         "behavior": "low_signal_forager", "width_pref": 0.6,
+         "curiosity": 0.9, "caution": 0.5, "sociality": 0.2,
+         "skill_prior": {"single_factor": 0.5, "majority_vote": 0.7, "linear_assoc": 0.7,
+                         "bagged_linear": 0.7, "codebook": 0.6},
+         "transform_prior": {"identity": 0.6, "sign_only": 0.7, "rank": 0.6, "quantize4": 0.6},
+         "family_prior": {"shadow": 0.95, "periphery": 0.9, "fault": 0.8, "echo": 0.75,
+                          "watershed": 0.7, "top": 0.3, "medoid": 0.3}},
+        # BLOODHOUND -- tracks a FAINT PERSISTENT scent: pheromone trails +
+        # persistence wells (mycelium/echo/springs/watershed), slow geology
+        {"name": "bloodhound", "metaheuristic": "scent_tracking", "species": "bloodhound",
+         "behavior": "faint_trail_follower", "width_pref": 0.7,
+         "curiosity": 0.6, "caution": 0.5, "sociality": 0.85,
+         "skill_prior": {"linear_assoc": 0.8, "bagged_linear": 0.85, "relay_caravan": 0.85,
+                         "recency_linear": 0.8, "swell_rider": 0.8, "terrain_router": 0.75},
+         "transform_prior": {"identity": 0.7, "tide": 0.8, "doppler": 0.7, "quantize8": 0.7,
+                             "dual_exposure": 0.6},
+         "family_prior": {"mycelium": 0.95, "echo": 0.9, "springs": 0.9, "watershed": 0.85,
+                          "stable": 0.8, "both_clocks": 0.75}},
+        # SPIDER -- feels which FEATURES vibrate the web: lives on the selection-
+        # hardener families (stabsel/irm/sign_stability/pls_weight/invariant)
+        {"name": "spider", "metaheuristic": "web_vibration_sense", "species": "spider",
+         "behavior": "feature_selection_web", "width_pref": 0.6,
+         "curiosity": 0.5, "caution": 0.7, "sociality": 0.6,
+         "skill_prior": {"linear_ols": 0.85, "pls": 0.9, "bayes_ridge": 0.85, "ard_linear": 0.8,
+                         "elastic_net": 0.85, "huber_linear": 0.75, "bagged_linear": 0.7},
+         "transform_prior": {"identity": 0.9, "rank": 0.7, "quantize4": 0.6},
+         "family_prior": {"stabsel": 0.95, "irm": 0.9, "sign_stability": 0.95,
+                          "pls_weight": 0.9, "invariant": 0.9, "medoid": 0.7}},
+        # OCTOPUS -- eight independent arms, each a DIFFERENT transform of the
+        # same view (pairwise/projected/curved channels)
+        {"name": "octopus", "metaheuristic": "distributed_arms", "species": "octopus",
+         "behavior": "multi_transform_arms", "width_pref": 0.4,
+         "curiosity": 0.8, "caution": 0.4, "sociality": 0.5,
+         "skill_prior": {"linear_assoc": 0.8, "bagged_linear": 0.8, "scout_lattice": 0.8,
+                         "steepness_gate": 0.7, "rapids": 0.7},
+         "transform_prior": {"fold_pairs": 0.9, "pca_aug": 0.85, "pair_aug": 0.9,
+                             "curvature": 0.8, "dual_exposure": 0.7, "foveated": 0.7,
+                             "identity": 0.4},
+         "family_prior": {"decor": 0.8, "medoid": 0.8, "top": 0.6, "anon": 0.6,
+                          "compass": 0.7, "phyllotaxis": 0.7}},
+    ]
+    _ins = next((i for i, t in enumerate(EXPLORER_TRAITS) if t.get("name") == "albatross"), 6) + 1
+    EXPLORER_TRAITS[_ins:_ins] = _SENSORY_PERSONAS
 
 
 class Explorer:
@@ -5186,6 +5310,11 @@ class Explorer:
                 prior += 0.01 * SURVEY.get(spec.family, 0.0) / (max(SURVEY.values()) + 1e-9)
             social_gain = max(library.mean_gain(key), library.family_gain(spec.family))
             wb = width_bias_beta()
+            if self.cfg.SENSORY_ROSTER:
+                # v34: per-explorer WIDTH_PREF scales the wide-path blend, so the
+                # population MIXES wide (albatross, pref 0.9) and narrow (kestrel,
+                # pref 0.1) trails in the SAME run. 0.5 = neutral = x1.0 = v33.
+                wb = max(0.0, min(1.0, wb * 2.0 * float(self.traits.get("width_pref", 0.5))))
             if wb > 0.0:
                 # v30 initial wide-path bias: the early social signal listens to
                 # WIDTH (robust lower-bound strength); anneals to pure corr-gain
@@ -7854,8 +7983,11 @@ class ExplorerHarness:
         RED_MYCELIUM.clear()             # fresh repellent channel (v14)
         GOVERNOR.clear()                 # v27: fresh runtime complexity-generalization governor
         WIDTH_BIAS["n"] = 0              # v30: fresh wide-path annealing clock
+        WIDTH_BIAS["target"] = 0.5       # v34: width target; self-tuned from the ledger below (0.5 = v33)
         if rs.cfg.WIDE_PERSONA:          # v33: the albatross occupies roster slot 7
             rs.cfg.N_EXPLORERS = max(rs.cfg.N_EXPLORERS, 8)
+        if rs.cfg.SENSORY_ROSTER:        # v34: the sensory menagerie runs when the metabolism allows
+            rs.cfg.N_EXPLORERS = max(rs.cfg.N_EXPLORERS, len(EXPLORER_TRAITS))
         LEDGER_PRIOR.clear()             # v27: fresh cross-run learning ledger (repopulated from prior cairn below)
         global FCLUST, HABITAT
         FCLUST = None; HABITAT = None; QUARANTINE.clear()   # fresh forensic sensors (v21)
@@ -7894,6 +8026,22 @@ class ExplorerHarness:
                             families=len(LEDGER_PRIOR.get("family_decay") or {}),
                             survivors=len(LEDGER_PRIOR.get("survivors") or []),
                             decayers=len(LEDGER_PRIOR.get("decayers") or []))
+                        # v34: self-tune the width TARGET from the MEASURED wide-path
+                        # evidence (NOT a revert -- the START stays wide; this shifts
+                        # only what the share anneals toward late in the run). The v33
+                        # run measured width_decay_corr=+0.2574, so attaching its output
+                        # leans the late-run population sharper on its own evidence.
+                        if rs.cfg.WIDTH_SELF_TUNE:
+                            rs.wdc = rs.gp.get("width_decay_corr")
+                            rs.wcnt = int(rs.gp.get("count", 0))
+                            if rs.wdc is not None and rs.wcnt > 0:
+                                rs.wshrink = rs.wcnt / (rs.wcnt + 1.0)   # evidence weight (more runs => stronger lean)
+                                WIDTH_BIAS["target"] = float(np.clip(
+                                    0.5 - rs.cfg.WIDTH_SELF_TUNE_GAIN * float(rs.wdc) * rs.wshrink,
+                                    rs.cfg.WIDTH_TARGET_MIN, rs.cfg.WIDTH_TARGET_MAX))
+                                log("width_self_tune", measured_width_decay=round(float(rs.wdc), 4),
+                                    evidence_runs=rs.wcnt, width_target=round(WIDTH_BIAS["target"], 4),
+                                    note="wide-decay>0 leans the LATE-run population sharper; START stays wide (no revert)")
                     if SEEDBANK:
                         log("seedbank_loaded", count=len(SEEDBANK), from_cairn=str(rs.pth),
                             keys="|".join(g.key for g in SEEDBANK))
@@ -9460,7 +9608,7 @@ class ExplorerHarness:
             rs.seed_bank.append(rs.l.key)
             if len(rs.seed_bank) >= rs.cfg.SEEDBANK_SIZE:
                 break
-        rs.cairn = {"version": "v33", "data_source": rs.data_source,
+        rs.cairn = {"version": "v34", "data_source": rs.data_source,
                  "gauge_edges": [float(e) for e in (GAUGE.edges if GAUGE is not None else [])],
                  "terrain_populations": rs.t_pop, "weather_populations": rs.w_pop,
                  "even_dominant": rs.n_even, "trap_count": len(TRAPS),
@@ -9482,7 +9630,7 @@ class ExplorerHarness:
                           key=lambda l: -(l.oof_corr - l.wf_corr))
             rs.decayers = list(dict.fromkeys(f"{l.skill}|{l.family}" for l in rs.decj))[: rs.cfg.LEDGER_MAX_DECAYERS]
             rs.gcount = int((rs.prev_led.get("governor") or {}).get("count", 0)) + 1
-            rs.ledger = {"version": "v33", "data_source": rs.data_source,
+            rs.ledger = {"version": "v34", "data_source": rs.data_source,
                       "governor": {"beta": round(float(GOVERNOR.get("beta", 0.0)), 5),
                                    "lambda": round(float(GOVERNOR.get("lambda", 0.0)), 5),
                                    "width_decay_corr": (round(rs.width_decay_corr, 5)
@@ -9600,7 +9748,7 @@ class ExplorerHarness:
              "No previous cairn was found; ours now stands."),
         ]
         write_chronicle({
-            "title": f"DRW world-explorer v33 ({rs.data_source})",
+            "title": f"DRW world-explorer v34 ({rs.data_source})",
             "features": len(rs.cols), "train_rows": rs.n, "sealed_rows": int(len(rs.sealed_idx)),
             "data_source": rs.data_source, "terrain_pop": rs.t_pop, "weather_pop": rs.w_pop,
             "even_dominant": rs.n_even, "explorer_lines": rs.explorer_lines,

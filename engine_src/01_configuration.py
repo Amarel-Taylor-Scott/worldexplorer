@@ -416,6 +416,40 @@ class HarnessConfig:
         "swell_rider|stable33_quantize4",            # smoothed label on temporally-stable features
     )
 
+    # v34 SELF-TUNING WIDTH + WIDE/NARROW MIX (user-directed: "do not revert or
+    # remove anything -- the system should tune itself; maybe a MIX of wide and
+    # short paths"). NOTHING from v30/v33 is removed: the wide bias stays fully
+    # capable. Two self-tuning additions, both no-op-safe:
+    #   * SENSORY_ROSTER also activates a per-explorer WIDTH_PREF (read in
+    #     ucb_pick): different personas carry different wide<->narrow preferences,
+    #     so a SINGLE run explores wide robust trails AND narrow sharp ridgelines
+    #     at once -- the mix. OFF (or pref 0.5) = exact v33.
+    #   * WIDTH_SELF_TUNE: the global width TARGET the share anneals toward is no
+    #     longer fixed at 0.5 -- it is set from the ledger's MEASURED
+    #     width_decay_corr (evidence-shrunk). width_decay_corr>0 (wide decayed
+    #     more, as DRW measured +0.26) LOWERS the target so the population leans
+    #     sharper LATER in the run; <0 RAISES it (lean wider). The START stays
+    #     WIDTH_BIAS_START, so early exploration is still wide -- this is a
+    #     self-correcting late-run lean from evidence, NOT a revert. No prior
+    #     ledger => target 0.5 => exact v33. (Attach the v33 output and it reads
+    #     the measured +0.2574 and leans sharp on its own.)
+    WIDTH_SELF_TUNE: bool = True
+    WIDTH_SELF_TUNE_GAIN: float = 1.5   # target = clip(0.5 - gain*shrunk(width_decay_corr), MIN, MAX)
+    WIDTH_TARGET_MIN: float = 0.2       # floor on the annealed target (never fully abandon width)
+    WIDTH_TARGET_MAX: float = 0.8       # ceiling (never exceed the wide end)
+
+    # v34 SENSORY MENAGERIE (user-directed: "more explorer primitives with
+    # different functionalities and ways of looking at their surroundings"). Six
+    # new personas, each a DISTINCT point on the narrow<->wide axis (so the
+    # population mixes both) AND a DISTINCT sense (family/transform priors = how
+    # it looks at the world): kestrel (narrow sharp stoop), mantis_shrimp (many
+    # spectral channels), owl (quiet/low-signal regions), bloodhound (faint
+    # persistent scent), spider (feature-selection web), octopus (independent
+    # multi-transform arms). Roster-only + N_EXPLORERS auto-bump + activates
+    # width_pref; OFF => v33 roster + behaviour exactly. The metabolism gates how
+    # many actually run, so raising TIME_BUDGET_MIN gives the menagerie airtime.
+    SENSORY_ROSTER: bool = True
+
     # v30.1 WINNER NETWORK (observation only, IDEAS.md 1a): the promoted trails
     # as a graph -- output-corr edges, leader-cluster communities. Feeds the
     # queued network-aware member-selection cap (1b) with measurements first.

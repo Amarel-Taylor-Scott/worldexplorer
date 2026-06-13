@@ -52,8 +52,11 @@ class ExplorerHarness:
         RED_MYCELIUM.clear()             # fresh repellent channel (v14)
         GOVERNOR.clear()                 # v27: fresh runtime complexity-generalization governor
         WIDTH_BIAS["n"] = 0              # v30: fresh wide-path annealing clock
+        WIDTH_BIAS["target"] = 0.5       # v34: width target; self-tuned from the ledger below (0.5 = v33)
         if rs.cfg.WIDE_PERSONA:          # v33: the albatross occupies roster slot 7
             rs.cfg.N_EXPLORERS = max(rs.cfg.N_EXPLORERS, 8)
+        if rs.cfg.SENSORY_ROSTER:        # v34: the sensory menagerie runs when the metabolism allows
+            rs.cfg.N_EXPLORERS = max(rs.cfg.N_EXPLORERS, len(EXPLORER_TRAITS))
         LEDGER_PRIOR.clear()             # v27: fresh cross-run learning ledger (repopulated from prior cairn below)
         global FCLUST, HABITAT
         FCLUST = None; HABITAT = None; QUARANTINE.clear()   # fresh forensic sensors (v21)
@@ -92,6 +95,22 @@ class ExplorerHarness:
                             families=len(LEDGER_PRIOR.get("family_decay") or {}),
                             survivors=len(LEDGER_PRIOR.get("survivors") or []),
                             decayers=len(LEDGER_PRIOR.get("decayers") or []))
+                        # v34: self-tune the width TARGET from the MEASURED wide-path
+                        # evidence (NOT a revert -- the START stays wide; this shifts
+                        # only what the share anneals toward late in the run). The v33
+                        # run measured width_decay_corr=+0.2574, so attaching its output
+                        # leans the late-run population sharper on its own evidence.
+                        if rs.cfg.WIDTH_SELF_TUNE:
+                            rs.wdc = rs.gp.get("width_decay_corr")
+                            rs.wcnt = int(rs.gp.get("count", 0))
+                            if rs.wdc is not None and rs.wcnt > 0:
+                                rs.wshrink = rs.wcnt / (rs.wcnt + 1.0)   # evidence weight (more runs => stronger lean)
+                                WIDTH_BIAS["target"] = float(np.clip(
+                                    0.5 - rs.cfg.WIDTH_SELF_TUNE_GAIN * float(rs.wdc) * rs.wshrink,
+                                    rs.cfg.WIDTH_TARGET_MIN, rs.cfg.WIDTH_TARGET_MAX))
+                                log("width_self_tune", measured_width_decay=round(float(rs.wdc), 4),
+                                    evidence_runs=rs.wcnt, width_target=round(WIDTH_BIAS["target"], 4),
+                                    note="wide-decay>0 leans the LATE-run population sharper; START stays wide (no revert)")
                     if SEEDBANK:
                         log("seedbank_loaded", count=len(SEEDBANK), from_cairn=str(rs.pth),
                             keys="|".join(g.key for g in SEEDBANK))
@@ -1658,7 +1677,7 @@ class ExplorerHarness:
             rs.seed_bank.append(rs.l.key)
             if len(rs.seed_bank) >= rs.cfg.SEEDBANK_SIZE:
                 break
-        rs.cairn = {"version": "v33", "data_source": rs.data_source,
+        rs.cairn = {"version": "v34", "data_source": rs.data_source,
                  "gauge_edges": [float(e) for e in (GAUGE.edges if GAUGE is not None else [])],
                  "terrain_populations": rs.t_pop, "weather_populations": rs.w_pop,
                  "even_dominant": rs.n_even, "trap_count": len(TRAPS),
@@ -1680,7 +1699,7 @@ class ExplorerHarness:
                           key=lambda l: -(l.oof_corr - l.wf_corr))
             rs.decayers = list(dict.fromkeys(f"{l.skill}|{l.family}" for l in rs.decj))[: rs.cfg.LEDGER_MAX_DECAYERS]
             rs.gcount = int((rs.prev_led.get("governor") or {}).get("count", 0)) + 1
-            rs.ledger = {"version": "v33", "data_source": rs.data_source,
+            rs.ledger = {"version": "v34", "data_source": rs.data_source,
                       "governor": {"beta": round(float(GOVERNOR.get("beta", 0.0)), 5),
                                    "lambda": round(float(GOVERNOR.get("lambda", 0.0)), 5),
                                    "width_decay_corr": (round(rs.width_decay_corr, 5)
@@ -1798,7 +1817,7 @@ class ExplorerHarness:
              "No previous cairn was found; ours now stands."),
         ]
         write_chronicle({
-            "title": f"DRW world-explorer v33 ({rs.data_source})",
+            "title": f"DRW world-explorer v34 ({rs.data_source})",
             "features": len(rs.cols), "train_rows": rs.n, "sealed_rows": int(len(rs.sealed_idx)),
             "data_source": rs.data_source, "terrain_pop": rs.t_pop, "weather_pop": rs.w_pop,
             "even_dominant": rs.n_even, "explorer_lines": rs.explorer_lines,

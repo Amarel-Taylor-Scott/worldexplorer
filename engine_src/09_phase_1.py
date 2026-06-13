@@ -183,7 +183,7 @@ if CFG.WIDE_PERSONA:
     # proven first seven personas are untouched; _setup raises N_EXPLORERS to 8.
     EXPLORER_TRAITS.insert(min(7, len(EXPLORER_TRAITS)), {
         "name": "albatross", "metaheuristic": "dynamic_soaring_glider", "species": "albatross",
-        "behavior": "wide_path_glider",
+        "behavior": "wide_path_glider", "width_pref": 0.9,   # v34: leans WIDE (robust width)
         "curiosity": 0.35, "caution": 0.8, "sociality": 0.7,
         "skill_prior": {"single_factor": 0.5, "bin_association": 0.3, "majority_vote": 0.95,
                         "theil_sen": 0.7, "recency_linear": 0.5, "local_interp": 0.1,
@@ -205,6 +205,88 @@ if CFG.WIDE_PERSONA:
                          "mycelium": 0.5, "shadow": 0.1, "periphery": 0.2,
                          "invariant": 0.95, "sign_stability": 0.95, "irm": 0.8,
                          "stabsel": 0.85, "pls_weight": 0.85, "tail": 0.8}})
+
+if CFG.SENSORY_ROSTER:
+    # v34 SENSORY MENAGERIE (user-directed: "more explorer primitives with
+    # different functionalities and ways of looking at their surroundings").
+    # Each persona is a DIFFERENT point on the narrow<->wide axis (width_pref,
+    # so one run mixes both) AND a DIFFERENT sense (sparse family/transform
+    # priors; .get default 0.5 leaves the rest neutral). Appended after the
+    # proven roster + albatross; _setup bumps N_EXPLORERS so they run when the
+    # metabolism has airtime. SENSORY_ROSTER off => this whole block is skipped.
+    # Spliced in right AFTER the albatross (not appended) so the wide<->narrow
+    # spread gets airtime ahead of the older v11 menagerie tail at light budgets.
+    _SENSORY_PERSONAS = [
+        # KESTREL -- the NARROW counterpart to the wide albatross: a sharp stoop
+        # on ONE tiny high-corr target (narrow lucky ridgelines, not robust width)
+        {"name": "kestrel", "metaheuristic": "stooping_hunter", "species": "kestrel",
+         "behavior": "narrow_sharp_stoop", "width_pref": 0.1,
+         "curiosity": 0.4, "caution": 0.3, "sociality": 0.4,
+         "skill_prior": {"single_factor": 0.95, "theil_sen": 0.9, "greedy_ols": 0.9,
+                         "linear_ols": 0.85, "majority_vote": 0.6, "bin_association": 0.5,
+                         "mlp_assoc": 0.1, "gbdt_lib": 0.2, "nonlinear_assoc": 0.2},
+         "transform_prior": {"identity": 0.8, "sign_only": 0.9, "quantize2": 0.85,
+                             "rank": 0.7, "quantize4": 0.6},
+         "family_prior": {"top": 0.95, "tail": 0.85, "medoid": 0.8, "decor": 0.7,
+                          "sign_stability": 0.8, "shadow": 0.1}},
+        # MANTIS_SHRIMP -- twelve-channel spectral vision: reads many SPECTRAL
+        # BANDS of the same feature at once (prism/moire/dual/lateral/fractal/RD)
+        {"name": "mantis_shrimp", "metaheuristic": "spectral_multichannel", "species": "mantis_shrimp",
+         "behavior": "many_band_vision", "width_pref": 0.5,
+         "curiosity": 0.85, "caution": 0.3, "sociality": 0.4,
+         "skill_prior": {"linear_assoc": 0.8, "bagged_linear": 0.8, "scout_lattice": 0.8,
+                         "rapids": 0.75, "terrace": 0.7},
+         "transform_prior": {"prism": 0.95, "moire": 0.9, "dual_exposure": 0.9,
+                             "lateral_line": 0.85, "fractal": 0.8, "reaction_diffusion": 0.8,
+                             "curvature": 0.7, "identity": 0.4},
+         "family_prior": {"top": 0.6, "anon": 0.6, "decor": 0.7, "medoid": 0.7,
+                          "weather": 0.7, "terrain": 0.6}},
+        # OWL -- nocturnal: hunts the QUIET regions everyone else ignores
+        # (shadow/periphery/fault) -- low-signal, high-variance negative space
+        {"name": "owl", "metaheuristic": "silent_night_hunter", "species": "owl",
+         "behavior": "low_signal_forager", "width_pref": 0.6,
+         "curiosity": 0.9, "caution": 0.5, "sociality": 0.2,
+         "skill_prior": {"single_factor": 0.5, "majority_vote": 0.7, "linear_assoc": 0.7,
+                         "bagged_linear": 0.7, "codebook": 0.6},
+         "transform_prior": {"identity": 0.6, "sign_only": 0.7, "rank": 0.6, "quantize4": 0.6},
+         "family_prior": {"shadow": 0.95, "periphery": 0.9, "fault": 0.8, "echo": 0.75,
+                          "watershed": 0.7, "top": 0.3, "medoid": 0.3}},
+        # BLOODHOUND -- tracks a FAINT PERSISTENT scent: pheromone trails +
+        # persistence wells (mycelium/echo/springs/watershed), slow geology
+        {"name": "bloodhound", "metaheuristic": "scent_tracking", "species": "bloodhound",
+         "behavior": "faint_trail_follower", "width_pref": 0.7,
+         "curiosity": 0.6, "caution": 0.5, "sociality": 0.85,
+         "skill_prior": {"linear_assoc": 0.8, "bagged_linear": 0.85, "relay_caravan": 0.85,
+                         "recency_linear": 0.8, "swell_rider": 0.8, "terrain_router": 0.75},
+         "transform_prior": {"identity": 0.7, "tide": 0.8, "doppler": 0.7, "quantize8": 0.7,
+                             "dual_exposure": 0.6},
+         "family_prior": {"mycelium": 0.95, "echo": 0.9, "springs": 0.9, "watershed": 0.85,
+                          "stable": 0.8, "both_clocks": 0.75}},
+        # SPIDER -- feels which FEATURES vibrate the web: lives on the selection-
+        # hardener families (stabsel/irm/sign_stability/pls_weight/invariant)
+        {"name": "spider", "metaheuristic": "web_vibration_sense", "species": "spider",
+         "behavior": "feature_selection_web", "width_pref": 0.6,
+         "curiosity": 0.5, "caution": 0.7, "sociality": 0.6,
+         "skill_prior": {"linear_ols": 0.85, "pls": 0.9, "bayes_ridge": 0.85, "ard_linear": 0.8,
+                         "elastic_net": 0.85, "huber_linear": 0.75, "bagged_linear": 0.7},
+         "transform_prior": {"identity": 0.9, "rank": 0.7, "quantize4": 0.6},
+         "family_prior": {"stabsel": 0.95, "irm": 0.9, "sign_stability": 0.95,
+                          "pls_weight": 0.9, "invariant": 0.9, "medoid": 0.7}},
+        # OCTOPUS -- eight independent arms, each a DIFFERENT transform of the
+        # same view (pairwise/projected/curved channels)
+        {"name": "octopus", "metaheuristic": "distributed_arms", "species": "octopus",
+         "behavior": "multi_transform_arms", "width_pref": 0.4,
+         "curiosity": 0.8, "caution": 0.4, "sociality": 0.5,
+         "skill_prior": {"linear_assoc": 0.8, "bagged_linear": 0.8, "scout_lattice": 0.8,
+                         "steepness_gate": 0.7, "rapids": 0.7},
+         "transform_prior": {"fold_pairs": 0.9, "pca_aug": 0.85, "pair_aug": 0.9,
+                             "curvature": 0.8, "dual_exposure": 0.7, "foveated": 0.7,
+                             "identity": 0.4},
+         "family_prior": {"decor": 0.8, "medoid": 0.8, "top": 0.6, "anon": 0.6,
+                          "compass": 0.7, "phyllotaxis": 0.7}},
+    ]
+    _ins = next((i for i, t in enumerate(EXPLORER_TRAITS) if t.get("name") == "albatross"), 6) + 1
+    EXPLORER_TRAITS[_ins:_ins] = _SENSORY_PERSONAS
 
 
 class Explorer:
@@ -265,6 +347,11 @@ class Explorer:
                 prior += 0.01 * SURVEY.get(spec.family, 0.0) / (max(SURVEY.values()) + 1e-9)
             social_gain = max(library.mean_gain(key), library.family_gain(spec.family))
             wb = width_bias_beta()
+            if self.cfg.SENSORY_ROSTER:
+                # v34: per-explorer WIDTH_PREF scales the wide-path blend, so the
+                # population MIXES wide (albatross, pref 0.9) and narrow (kestrel,
+                # pref 0.1) trails in the SAME run. 0.5 = neutral = x1.0 = v33.
+                wb = max(0.0, min(1.0, wb * 2.0 * float(self.traits.get("width_pref", 0.5))))
             if wb > 0.0:
                 # v30 initial wide-path bias: the early social signal listens to
                 # WIDTH (robust lower-bound strength); anneals to pure corr-gain
