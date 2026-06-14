@@ -53,7 +53,7 @@ pushable manifest:
 python tools/fleet.py bootstrap \
   --name wx-github-v020 \
   --internet \
-  --repo git+https://github.com/taylorsamarel/worldexplorer.git \
+  --repo git+https://github.com/Amarel-Taylor-Scott/worldexplorer.git \
   --repo-ref v0.2.0 \
   --time-budget 120 \
   --override SEED=7
@@ -92,7 +92,7 @@ python tools/fleet.py bootstrap \
   --name wx-dataset-v020 \
   --engine-dataset /kaggle/input/worldexplorer-engine \
   --dataset taylorsamarel/worldexplorer-engine \
-  --repo git+https://github.com/taylorsamarel/worldexplorer.git \
+  --repo git+https://github.com/Amarel-Taylor-Scott/worldexplorer.git \
   --repo-ref v0.2.0 \
   --time-budget 120
 ```

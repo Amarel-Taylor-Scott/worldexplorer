@@ -1,5 +1,5 @@
 """Generic quickstart -- any tabular dataframe + a target column name.
-    pip install git+https://github.com/taylorsamarel/worldexplorer.git
+    pip install git+https://github.com/Amarel-Taylor-Scott/worldexplorer.git
 """
 import worldexplorer as wx
 

@@ -70,7 +70,7 @@ python tools/publish.py submit /home/username/drw_out/submission.csv -m "v36 run
   engine:
   ```bash
   python tools/fleet.py bootstrap --name wx-github-v020 --internet \
-    --repo git+https://github.com/taylorsamarel/worldexplorer.git \
+    --repo git+https://github.com/Amarel-Taylor-Scott/worldexplorer.git \
     --repo-ref v0.2.0 --time-budget 120
   python tools/fleet.py push --manifest /home/username/new_algo/kaggle/fleet/wx-github-v020_manifest.json
   ```

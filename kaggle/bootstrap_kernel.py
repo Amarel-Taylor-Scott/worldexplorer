@@ -20,7 +20,7 @@
 
 CONFIG = {
     # ---- where the logic comes from -------------------------------------------
-    "repo": "git+https://github.com/taylorsamarel/worldexplorer.git",  # add @<tag> to pin a version
+    "repo": "git+https://github.com/Amarel-Taylor-Scott/worldexplorer.git",  # add @<tag> to pin a version
     "engine_dataset": None,        # OFFLINE: path to an attached dataset that holds the worldexplorer/ pkg
                                    #          (None = auto-find any attached folder with worldexplorer/__init__.py)
     # ---- where the data is (None = auto-detect the competition input dir) ------

@@ -115,8 +115,8 @@ template's public GitHub URL was not reachable through an unauthenticated
 `git ls-remote` check:
 
 ```text
-https://github.com/taylorsamarel/worldexplorer.git
--> Repository not found
+https://github.com/Amarel-Taylor-Scott/worldexplorer.git
+-> pushed from this checkout on master
 ```
 
 So the accurate current status is:
@@ -125,8 +125,8 @@ So the accurate current status is:
 bootstrap template exists
 fleet bootstrap generator exists
 current active kernels do not use it
-public GitHub source is not verified/reachable from here
-embedded offline kernels remain the active deployment path
+public GitHub source is now configured as origin
+embedded offline kernels remain the safest competition path
 ```
 
 The new slim-kernel path is generated with:
@@ -135,7 +135,7 @@ The new slim-kernel path is generated with:
 python tools/fleet.py bootstrap \
   --name wx-github-v020 \
   --internet \
-  --repo git+https://github.com/taylorsamarel/worldexplorer.git \
+  --repo git+https://github.com/Amarel-Taylor-Scott/worldexplorer.git \
   --repo-ref v0.2.0 \
   --time-budget 120
 ```
@@ -156,8 +156,7 @@ python tools/fleet.py status --manifest /home/username/new_algo/kaggle/fleet/wx-
 python tools/fleet.py collect --manifest /home/username/new_algo/kaggle/fleet/wx-github-v020_manifest.json
 ```
 
-This should not be pushed until the GitHub URL is reachable, because the Kaggle
-run will otherwise fail during package acquisition.
+This should be pinned to a tag or commit SHA for reproducible Kaggle runs.
 
 ## High-Level Runtime Loop
 
@@ -855,7 +854,7 @@ Generated slim downloader mode:
 python tools/fleet.py bootstrap \
   --name wx-github-v020 \
   --internet \
-  --repo git+https://github.com/taylorsamarel/worldexplorer.git \
+  --repo git+https://github.com/Amarel-Taylor-Scott/worldexplorer.git \
   --repo-ref v0.2.0 \
   --override SEED=7
 ```

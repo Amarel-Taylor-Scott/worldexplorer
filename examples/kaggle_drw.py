@@ -9,7 +9,7 @@ import subprocess, sys
 # 1. acquire worldexplorer (Internet ON). For Internet-OFF competitions, attach
 #    the repo as a Kaggle Dataset and use kaggle/bootstrap_kernel.py instead.
 subprocess.run([sys.executable, "-m", "pip", "install", "-q",
-                "git+https://github.com/taylorsamarel/worldexplorer.git"], check=True)
+                "git+https://github.com/Amarel-Taylor-Scott/worldexplorer.git"], check=True)
 
 import worldexplorer as wx
 

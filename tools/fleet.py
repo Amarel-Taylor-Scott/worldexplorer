@@ -734,7 +734,7 @@ def main(argv=None) -> int:
     bs.add_argument("--out", default=str(DEFAULT_OUT))
     bs.add_argument("--name", default="github-bootstrap")
     bs.add_argument("--title", default=None)
-    bs.add_argument("--repo", default="git+https://github.com/taylorsamarel/worldexplorer.git")
+    bs.add_argument("--repo", default="git+https://github.com/Amarel-Taylor-Scott/worldexplorer.git")
     bs.add_argument("--repo-ref", default=None, help="commit SHA/tag/branch appended as @ref")
     bs.add_argument("--engine-dataset", default=None,
                     help="offline attached dataset path, e.g. /kaggle/input/worldexplorer-engine")

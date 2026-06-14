@@ -65,8 +65,8 @@ Selection is never done on a slice the path was tuned against; complexity is pen
 
 ```bash
 # straight from GitHub (no clone):
-pip install "git+https://github.com/taylorsamarel/worldexplorer.git"
-pip install "worldexplorer[full] @ git+https://github.com/taylorsamarel/worldexplorer.git"   # + torch/lgbm/xgb
+pip install "git+https://github.com/Amarel-Taylor-Scott/worldexplorer.git"
+pip install "worldexplorer[full] @ git+https://github.com/Amarel-Taylor-Scott/worldexplorer.git"   # + torch/lgbm/xgb
 
 # or a local checkout:
 pip install -e .            # core (numpy/pandas/scikit-learn/pyarrow)
@@ -82,7 +82,7 @@ The engine (`worldexplorer/_engine.py`) is amalgamated from the modular source b
 The whole notebook becomes a few lines — no giant paste:
 
 ```python
-!pip install -q git+https://github.com/taylorsamarel/worldexplorer.git
+!pip install -q git+https://github.com/Amarel-Taylor-Scott/worldexplorer.git
 import pandas as pd, worldexplorer as wx
 r = wx.explore("/kaggle/input/<comp>/train.parquet", target="label",
                test="/kaggle/input/<comp>/test.parquet", out="/kaggle/working", time_budget=690)
