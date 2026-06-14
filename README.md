@@ -61,6 +61,327 @@ Selection is never done on a slice the path was tuned against; complexity is pen
 
 ---
 
+## How the code works
+
+WorldExplorer has three layers:
+
+```text
+1. Front ends
+   Python API, CLI, and Kaggle bootstrap.
+
+2. Engine
+   The feature-space explorer, generated from engine_src/ into
+   worldexplorer/_engine.py.
+
+3. Tooling
+   Fleet launchers, memory-matrix builders, telemetry review, route-carve
+   experiments, publishing, and source audits.
+```
+
+The normal call path is:
+
+```text
+wx.explore(...) or wx.kaggle.run(CONFIG)
+  -> autoconfig/profile data
+  -> adapter writes engine-shaped train/test/sample_submission files
+  -> ExplorerHarness(HarnessConfig).run()
+  -> submission.csv + reports + durable run memory
+```
+
+On Kaggle, the preferred notebook is only a launcher:
+
+```text
+kaggle/bootstrap_kernel.py
+  -> install package from GitHub
+  -> import worldexplorer as wx
+  -> wx.kaggle.run(CONFIG)
+```
+
+That keeps all logic in GitHub. The Kaggle Dataset wheel/source mirror exists
+only for internet-disabled notebooks.
+
+### Main entrypoints
+
+| Entrypoint | File | Purpose |
+|---|---|---|
+| `wx.profile` | `worldexplorer/autoconfig.py` | Detect target, metric, validation geometry, ids, categorical columns, and default budget. |
+| `wx.explore` | `worldexplorer/adapter.py` | Generic dataframe/path interface. Converts arbitrary tabular data into the engine's expected layout. |
+| `wx.kaggle.run` | `worldexplorer/kaggle.py` | Kaggle-specific path resolver. Finds train/test/sample submission, runs the engine, writes `submission.csv`. |
+| `worldexplorer` CLI | `worldexplorer/cli.py` | Shell wrapper around `wx.profile` and `wx.explore`. |
+| `ExplorerHarness.run` | `engine_src/16_harness.py` | Main engine runtime. Builds topology, searches, attacks, selects, ships, and writes memory. |
+| Slim bootstrap | `kaggle/bootstrap_kernel.py` | Fetches the package and calls `wx.kaggle.run(CONFIG)`. |
+
+### Engine source model
+
+The editable engine source is in `engine_src/`. The installable package imports
+the generated file:
+
+```text
+engine_src/*.py -> python sync_engine.py -> worldexplorer/_engine.py
+```
+
+`worldexplorer/_engine.py` is committed so `pip install` from GitHub is
+self-contained. When changing engine logic, edit `engine_src/` and then run:
+
+```bash
+python sync_engine.py
+```
+
+Important modules:
+
+| Area | Files |
+|---|---|
+| Config and runtime budget | `engine_src/01_configuration.py`, `engine_src/03_metabolism.py` |
+| Data discovery and profiling | `engine_src/05_data_discovery_synthetic_f.py`, `worldexplorer/autoconfig.py` |
+| Row and feature topology | `engine_src/06_viewports__*.py` |
+| Model and transform skills | `engine_src/07_skills__*.py` |
+| Candidate path bookkeeping | `engine_src/08_lessons.py` |
+| Search phases | `engine_src/09_phase_1.py`, `engine_src/10_phase_2.py` |
+| Adversarial validators | `engine_src/11_predator_persona.py` |
+| Reports and terrain summaries | `engine_src/12_topography_reports__*.py` |
+| Ensembles and many-world scoring | `engine_src/13_ensemble__*.py` |
+| Robust OOS and shipping court | `engine_src/15_v21_forensic_regime_scienc__*.py` |
+| Main runtime | `engine_src/16_harness.py` |
+
+### Runtime sequence
+
+An engine run does this:
+
+```text
+1. Read config, data, prior memory, and time budget.
+2. Build validation geometry: temporal, random, sealed, or auto-detected.
+3. Build row-space maps: terrain, weather, pressure, beacons, test-likeness.
+4. Build feature-space maps: feature graph, communities, shift, agreement, stability.
+5. Generate bounded viewports: selected columns, ranks, quantized views, PLS views,
+   topology residuals, tail/order blocks, beacon fields, and routed regions.
+6. Train candidate lessons with model/skill families.
+7. Promote only candidates that pass width, stability, uniqueness, and cost gates.
+8. Attack promoted candidates with predator validators.
+9. Re-score survivors across many worlds and robust OOS courts.
+10. Run the shipping court to down-weight fragile or crowded members.
+11. Write `submission.csv`.
+12. Write reports, ledgers, atlas artifacts, and next-run memory.
+```
+
+The search is intentionally branchy. Failed paths are not thrown away
+silently; they become anti-priors or evidence for future runs.
+
+### The world model
+
+WorldExplorer treats a dataset as multiple overlapping spaces:
+
+```text
+X = raw feature matrix
+Y = target or label
+E = environment/regime assignments
+Z = transformed coordinates
+P = row-to-region membership
+G_row = row topology
+G_feat = feature topology
+R = residual/uncertainty surfaces
+Theta = model parameters and ensemble weights
+```
+
+The code does not store all of these as full durable tensors yet. Some are
+runtime objects and some are reports. The `tools/memory_matrices.py` direction is
+to turn more of them into durable matrices/operators that later runs can reuse.
+
+### Row-space topology
+
+Rows are mapped into regions so the engine can distinguish global signal from
+local pockets.
+
+Examples:
+
+```text
+TerrainAtlas   -> target-free row clusters and altitude/novelty
+WeatherGauge   -> volatility-like row regimes
+PressureGauge  -> microstructure or local-pressure regimes
+BeaconField    -> radial basis landmarks around useful terrain locations
+TESTLIKE       -> target-free probability that a row resembles the test set
+```
+
+These maps let the engine ask:
+
+```text
+Does this path work everywhere, or only in one terrain?
+Does a local fix help a weird region but damage nearby plateaus?
+Does a model fail exactly where rows look test-like?
+```
+
+### Feature-space topology
+
+Features are also mapped as a graph.
+
+Examples:
+
+```text
+FeatureGraph                 -> feature-feature communities
+sign_stability               -> whether feature-target direction flips
+PLS / target-alignment ranks -> supervised low-dimensional directions
+testlike stability           -> whether a signal survives domain shift
+redundancy/crowding          -> whether two members are the same signal twice
+```
+
+This is how the engine tries to avoid false agreement from collinear features or
+duplicate routes. A feature is rarely just "good" or "bad"; it can be globally
+weak, locally useful, shifted, redundant, route-limited, or suspicious.
+
+### Candidate lessons
+
+A lesson is one measured candidate path:
+
+```text
+explorer
+stage
+skill/model family
+viewport
+transform
+feature subset
+OOF score
+walk-forward or sealed score
+stability diagnostics
+predator verdict
+promotion decision
+```
+
+Candidate paths are created by explorers, then measured and filtered. The
+engine favors paths that are:
+
+```text
+wide across folds
+stable across regimes
+positive in worst worlds
+not redundant with existing members
+not too complex for the measured decay slope
+hard to kill by null/perturbation/regime attacks
+```
+
+### Adversarial validation
+
+The validator stack is deliberately hostile:
+
+```text
+draft gates
+dual-geometry checks
+forward/sealed checks
+terrain and weather checks
+null and permutation attacks
+perturbation attacks
+time-reversal style checks
+many-world reports
+robust OOS selection
+shipping court
+```
+
+Key artifacts:
+
+```text
+predator_report.csv
+many_worlds_cv.csv
+robust_oos_selection.csv
+shipping_court_report.csv
+sealed_holdout_report.json
+regime_criticality.json
+```
+
+The main adversarial question is always:
+
+```text
+Did this path learn a stable relationship, or did it learn one validation shape?
+```
+
+### Cross-run memory
+
+Each run writes memory for the next run:
+
+```text
+learning_ledger.json
+world_cairn.json
+explorer_findings_graph.json
+complexity_governor.json
+feature_topology_report.csv
+path_texture_report.csv
+shipping_court_report.csv
+many_worlds_cv.csv
+```
+
+The current memory is mostly report-backed. The intended direction is a
+computational atlas:
+
+```text
+actual tensors and matrices
+feature-space operators
+projection bases
+route-strength estimates
+residual fields
+grokking candidates
+contradiction graphs
+checkpoint lineage
+```
+
+The main tool for this direction is:
+
+```bash
+python tools/memory_matrices.py
+```
+
+### Fleet and Kaggle workflow
+
+`tools/fleet.py` generates slim Kaggle kernels. The generated kernels are not
+source code; they are launch artifacts.
+
+GitHub-first breaker fleet:
+
+```bash
+python tools/fleet.py breaker \
+  --count 5 \
+  --prefix breaker-github-master \
+  --time-budget 180
+```
+
+Offline wheel-backed bootstrap:
+
+```bash
+python tools/fleet.py bootstrap \
+  --name wx-offline-wheel \
+  --offline \
+  --source-policy wheel_first \
+  --engine-dataset /kaggle/input/worldexplorer-engine \
+  --dataset taylorsamarel/worldexplorer-engine \
+  --time-budget 120
+```
+
+### What research agents should inspect
+
+For adversarial validation and improvement work, start with:
+
+```text
+RESEARCH_AGENT_BRIEF.md
+SOURCE_OF_TRUTH.md
+engine_src/06_viewports__*.py
+engine_src/07_skills__*.py
+engine_src/11_predator_persona.py
+engine_src/15_v21_forensic_regime_scienc__*.py
+engine_src/16_harness.py
+tools/memory_matrices.py
+tools/telemetry_guidance.py
+tools/source_audit.py
+```
+
+Useful external feedback should name:
+
+```text
+file/function inspected
+failure mode found
+artifact or metric affected
+minimal reproduction or test
+specific code or validation change
+expected risk and expected benefit
+```
+
+---
+
 ## Install
 
 ```bash
@@ -116,10 +437,15 @@ See `examples/kaggle_drw.py`. **Self‑improvement across runs:** attach a run's
 ## Repo layout
 
 ```
-worldexplorer/      pip package: __init__, autoconfig, adapter, cli, _engine
-engine_src/         the 18 modular sources the engine is amalgamated from
-sync_engine.py      engine_src/*.py  ->  worldexplorer/_engine.py
-examples/           kaggle_drw.py, quickstart.py
+worldexplorer/        pip package: __init__, autoconfig, adapter, cli, kaggle, _engine
+engine_src/           modular engine sources; edit these before regenerating _engine
+kaggle/               slim bootstrap template
+tools/                fleet, memory, telemetry, publishing, smoke, and audit tools
+examples/             kaggle_drw.py, quickstart.py
+tests/                adapter and Kaggle wrapper tests
+sync_engine.py        engine_src/*.py -> worldexplorer/_engine.py
+SOURCE_OF_TRUTH.md    rule that GitHub owns the logic and Kaggle owns launch config
+RESEARCH_AGENT_BRIEF.md external handoff for adversarial validation agents
 ```
 
 `_engine.py` is generated (committed so installs are self‑contained); edit `engine_src/` and re‑run `sync_engine.py`.
