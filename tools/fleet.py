@@ -139,6 +139,146 @@ GROK_DOCTRINE = (
     "cannot ship directly; any result must pass the same robust OOS court."
 )
 
+BREAKER_DOCTRINE = (
+    "WorldExplorer .1-breaker runs are framework-native attempts to leave the "
+    "0.085 route-carve basin. They focus budget on the internal 0.111-class "
+    "mechanisms already in the engine: greedy OLS, tail/order blocks, stability "
+    "selection, PLS selectors, testlike partitions, and robust OOS promotion."
+)
+
+BREAKER_WARM_GENOMES = [
+    "greedy_ols|tail32_identity",
+    "greedy_ols|tail48_identity",
+    "greedy_ols|tail64_identity",
+    "greedy_ols|tail96_identity",
+    "greedy_ols|tail120_identity",
+    "greedy_ols|tail64_rank",
+    "greedy_ols|tail64_quantize4",
+    "linear_ols|tail50_identity",
+    "linear_ols|tail80_identity",
+    "pls|tail120_identity",
+    "bayes_ridge|tail120_identity",
+    "ard_linear|tail80_identity",
+    "greedy_ols|sign_stability64_identity",
+    "greedy_ols|pls_weight64_identity",
+    "greedy_ols|testlike_stable64_identity",
+    "pls|sign_stability96_identity",
+    "bayes_ridge|pls_weight120_identity",
+]
+
+
+def breaker_members(prefix: str, *, count: int, seed: int, gpu_frac: float, time_budget: float) -> list[dict]:
+    rng = random.Random(seed)
+    modes = [
+        ("tail-sharp", {
+            "WIDTH_BIAS_START": 0.25,
+            "POSITIONAL_BLOCK": 96,
+            "GREEDY_OLS_CAP": 64,
+            "GREEDY_OLS_MIN_DELTA": 0.00005,
+            "GOV_LAMBDA_SCALE": 0.9,
+            "GOV_LAMBDA_MAX": 0.06,
+        }),
+        ("tail-wide", {
+            "WIDTH_BIAS_START": 0.55,
+            "POSITIONAL_BLOCK": 160,
+            "GREEDY_OLS_CAP": 96,
+            "GREEDY_OLS_MIN_DELTA": 0.00002,
+            "GOV_LAMBDA_SCALE": 0.7,
+            "GOV_LAMBDA_MAX": 0.05,
+        }),
+        ("stabsel-greedy", {
+            "WIDTH_BIAS_START": 0.45,
+            "POSITIONAL_BLOCK": 120,
+            "GREEDY_OLS_CAP": 80,
+            "STABSEL_POOL": 480,
+            "STABSEL_BOOT": 20,
+            "SIGNSTAB_MAX_FLIP": 0.20,
+            "GOV_LAMBDA_SCALE": 1.0,
+            "GOV_LAMBDA_MAX": 0.07,
+        }),
+        ("pls-testlike", {
+            "WIDTH_BIAS_START": 0.40,
+            "POSITIONAL_BLOCK": 160,
+            "GREEDY_OLS_CAP": 96,
+            "PLSRANK_POOL": 480,
+            "PLSRANK_COMPONENTS": 16,
+            "TESTLIKE_FRACS": [0.15, 0.30, 0.45],
+            "SHIFT_PENALTY": 0.75,
+            "GOV_LAMBDA_SCALE": 0.85,
+        }),
+        ("governed-simple", {
+            "WIDTH_BIAS_START": 0.30,
+            "POSITIONAL_BLOCK": 80,
+            "GREEDY_OLS_CAP": 48,
+            "GREEDY_OLS_MIN_DELTA": 0.00010,
+            "GOV_LAMBDA_SCALE": 1.35,
+            "GOV_LAMBDA_MAX": 0.09,
+            "MAX_FAMILY_MEMBERS": 2,
+            "MIN_BLEND_MEMBERS": 4,
+        }),
+    ]
+    base = {
+        "TIME_BUDGET_MIN": float(time_budget),
+        "RESERVE_MIN": 30.0,
+        "N_EXPLORERS": 14,
+        "LESSON_BUDGET": 36,
+        "MAX_SEASONS": 14,
+        "MAX_EPOCHS": 12,
+        "EVOLUTION_BUDGET": 96,
+        "EVOLUTION_OFFSPRING": 8,
+        "EVOLUTION_PATIENCE": 6,
+        "ATTENTION_POOL": 24,
+        "DIVE_BUDGET": 12,
+        "DREAM_REPLAYS": 220,
+        "CONFIG_GRID_TOPK": 12,
+        "ROBUST_HEDGE_BAND": 0.006,
+        "ROBUST_MAX_MEMBERS": 18,
+        "MAX_MEMBERS": 14,
+        "WIDTH_BIAS_HALFLIFE": 90,
+        "GREEDY_OLS_TR_ROWS": 12000,
+        "GREEDY_OLS_VA_ROWS": 8000,
+        "GREEDY_OLS_FALLBACK_K": 36,
+        "WIDE_PERSONA": True,
+        "SENSORY_ROSTER": True,
+        "WIDE_SEEDS": True,
+        "TESTLIKE_PARTITIONS": True,
+        "TESTLIKE_FEATURE_GATE": True,
+        "PLSRANK_FAMILY": True,
+        "SIGNSTAB_FAMILY": True,
+        "CONSENSUS_FAMILY": True,
+        "CONSENSUS_ENSEMBLE": True,
+        "FORENSIC_ENABLED": True,
+        "ROBUST_OOS_SELECT": True,
+        "SHIPPING_COURT": True,
+        "WARM_GENOMES": BREAKER_WARM_GENOMES,
+        "WIDE_WARM_GENOMES": BREAKER_WARM_GENOMES[:10],
+    }
+    members: list[dict] = []
+    for i in range(count):
+        mode, mode_ov = modes[i % len(modes)]
+        ov = dict(base)
+        ov.update(mode_ov)
+        ov["SEED"] = rng.randrange(1_000, 2_000_000_000)
+        gpu = rng.random() < max(0.0, min(1.0, gpu_frac))
+        members.append({
+            "name": f"{prefix}-{i + 1:02d}-{mode}",
+            "gpu": bool(gpu),
+            "ov": ov,
+            "mode": "breaker",
+            "breaker_mode": mode,
+            "hypothesis": (
+                "Can WorldExplorer's own greedy-OLS/tail/stability/PLS/testlike "
+                "families escape the 0.085 route-carve basin under robust OOS court?"
+            ),
+            "translation_goal": (
+                "Promote only if a framework-native low-complexity path survives "
+                "forward, testlike, many-world, and shipping-court checks."
+            ),
+            "signal_action": "framework_native_breakpoint_search",
+            "trust_policy": "normal_submission_candidate_after_robust_court",
+        })
+    return members
+
 
 def grok_members(prefix: str, *, count: int, seed: int, gpu_frac: float) -> list[dict]:
     rng = random.Random(seed)
@@ -545,6 +685,82 @@ def cmd_bootstrap(a) -> None:
     print(f"push:     python tools/fleet.py push --out {out} --manifest {manifest}")
 
 
+def cmd_breaker(a) -> None:
+    """Build slim framework-native .1-breaker kernels.
+
+    Unlike route_carve, this does not transform existing submissions. It asks
+    WorldExplorer to spend runtime on the internal mechanisms most likely to
+    produce a new basin: greedy OLS over positional/stability/PLS/testlike
+    spaces, then normal robust promotion.
+    """
+    template = Path(a.template).read_text()
+    out = Path(a.out)
+    user = kaggle_user()
+    out.mkdir(parents=True, exist_ok=True)
+    members = breaker_members(
+        a.prefix,
+        count=a.count,
+        seed=a.seed,
+        gpu_frac=a.gpu_frac,
+        time_budget=a.time_budget,
+    )
+    manifest = Path(a.manifest) if a.manifest else out / f"{a.prefix}_manifest.json"
+    repo = _repo_with_ref(a.repo, a.repo_ref)
+    dataset_sources = list(a.dataset or [])
+    for m in members:
+        d = out / m["name"]
+        d.mkdir(parents=True, exist_ok=True)
+        shutil.rmtree(d / "__pycache__", ignore_errors=True)
+        config = {
+            "repo": repo,
+            "engine_dataset": a.engine_dataset,
+            "data_root": a.data_root,
+            "target": a.target,
+            "train": None,
+            "test": None,
+            "sample_submission": None,
+            "submission_target_col": None,
+            "metric": "auto",
+            "geometry": "auto",
+            "time_budget_min": a.time_budget,
+            "out": "/kaggle/working",
+        }
+        text = _inject_bootstrap_config(template, config, m["ov"])
+        (d / "kernel.py").write_text(text, encoding="utf-8")
+        (d / "kernel-metadata.json").write_text(
+            json.dumps(
+                _kernel_metadata(
+                    user=user,
+                    name=m["name"],
+                    title=f"DRW WX {m['name']}",
+                    gpu=bool(m["gpu"]),
+                    internet=bool(a.internet),
+                    competition=a.competition,
+                    datasets=dataset_sources,
+                ),
+                indent=2,
+                sort_keys=True,
+            ),
+            encoding="utf-8",
+        )
+        m["repo"] = repo
+        m["engine_dataset"] = a.engine_dataset
+        m["source_mode"] = "github" if a.internet else "attached_dataset"
+        print(f"breaker {m['name']:26s} {'GPU' if m['gpu'] else 'CPU'} mode={m['breaker_mode']} repo={repo}")
+    manifest.write_text(
+        json.dumps(
+            {"version": 1, "seed": a.seed, "doctrine": BREAKER_DOCTRINE, "members": members},
+            indent=2,
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    print(f"\nmanifest: {manifest}\n"
+          f"push:    python tools/fleet.py push --out {out} --manifest {manifest}\n"
+          f"status:  python tools/fleet.py status --manifest {manifest}\n"
+          f"collect: python tools/fleet.py collect --out {out} --manifest {manifest} --submit")
+
+
 def cmd_build(a) -> None:
     base = Path(a.kernel).read_text()
     out = Path(a.out)
@@ -778,6 +994,24 @@ def main(argv=None) -> int:
     gp.add_argument("--prefix", default="grok-atlas")
     gp.add_argument("--gpu-frac", type=float, default=0.0)
     gp.add_argument("--manifest", default=None); gp.set_defaults(fn=cmd_grok)
+    br = sub.add_parser("breaker")
+    br.add_argument("--template", default=str(DEFAULT_BOOTSTRAP))
+    br.add_argument("--out", default=str(DEFAULT_OUT))
+    br.add_argument("--count", type=int, default=5)
+    br.add_argument("--seed", type=int, default=20260614)
+    br.add_argument("--prefix", default="breaker")
+    br.add_argument("--gpu-frac", type=float, default=0.0)
+    br.add_argument("--time-budget", type=float, default=180.0)
+    br.add_argument("--repo", default="git+https://github.com/Amarel-Taylor-Scott/worldexplorer.git")
+    br.add_argument("--repo-ref", default="v0.2.1")
+    br.add_argument("--internet", action="store_true")
+    br.add_argument("--engine-dataset", default=None)
+    br.add_argument("--dataset", nargs="*", default=None)
+    br.add_argument("--competition", default=COMP)
+    br.add_argument("--data-root", default=None)
+    br.add_argument("--target", default="label")
+    br.add_argument("--manifest", default=None)
+    br.set_defaults(fn=cmd_breaker)
     p = sub.add_parser("push"); p.add_argument("--out", default=str(DEFAULT_OUT))
     p.add_argument("--manifest", default=None)
     p.add_argument("--members", nargs="*", default=None); p.set_defaults(fn=cmd_push)

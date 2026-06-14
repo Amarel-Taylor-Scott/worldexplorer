@@ -324,17 +324,19 @@ def _fit_greedyols(Z: np.ndarray, y_tr: np.ndarray, in_tr: np.ndarray, in_va: np
     # Plain LinearRegression (no shrinkage); the overfit door + robust
     # selector keep it honest, so it ships only where it genuinely wins.
     d = Z.shape[1]
-    cap = min(d, 48)                        # candidate features the scan considers
+    cap = min(d, max(2, int(getattr(ctx.cfg, "GREEDY_OLS_CAP", 48))))  # candidate features scanned
     tr_rows = np.where(in_tr)[0]
     va_rows = np.where(in_va)[0]
     # the SELECTION scan runs on a SMALL row sample (the feature ranking is
     # cheap + stable); the FINAL OLS below fits on ALL rows. This keeps
     # greedy_ols affordable even when the robust/forensic layer refits it
     # across many partitions -- the cost guard that makes it run-ready.
-    if len(tr_rows) > 6000:
-        tr_rows = tr_rows[:: max(1, len(tr_rows) // 6000)]
-    if len(va_rows) > 4000:
-        va_rows = va_rows[:: max(1, len(va_rows) // 4000)]
+    tr_cap = max(500, int(getattr(ctx.cfg, "GREEDY_OLS_TR_ROWS", 6000)))
+    va_cap = max(500, int(getattr(ctx.cfg, "GREEDY_OLS_VA_ROWS", 4000)))
+    if len(tr_rows) > tr_cap:
+        tr_rows = tr_rows[:: max(1, len(tr_rows) // tr_cap)]
+    if len(va_rows) > va_cap:
+        va_rows = va_rows[:: max(1, len(va_rows) // va_cap)]
     Ztr, ytr_s = Z[tr_rows][:, :cap], y_tr[tr_rows]
     Zva, yva_s = Z[va_rows][:, :cap], y_tr[va_rows]
     selected, best = [], -1e9
@@ -344,10 +346,10 @@ def _fit_greedyols(Z: np.ndarray, y_tr: np.ndarray, in_tr: np.ndarray, in_va: np
             m = make_pipeline(StandardScaler(), LinearRegression())
             m.fit(Ztr[:, cand], ytr_s)
             sc = pearson(yva_s, m.predict(Zva[:, cand]))
-            if sc > best + 1e-4:           # keep the feature only if it helps OOS
+            if sc > best + float(getattr(ctx.cfg, "GREEDY_OLS_MIN_DELTA", 1e-4)):
                 best, selected = sc, cand
     if not selected:
-        selected = list(range(min(d, 30)))
+        selected = list(range(min(d, max(2, int(getattr(ctx.cfg, "GREEDY_OLS_FALLBACK_K", 30))))))
     model = make_pipeline(StandardScaler(), LinearRegression())
     model.fit(Z[:, selected], y_tr)         # final fit uses ALL rows + selected cols
     state.update(model=model, sel=selected, n_selected=len(selected))
@@ -809,5 +811,4 @@ def fit_skill(skill: str, spec: ViewportSpec, X_tr: np.ndarray, y_tr: np.ndarray
         raise ValueError(f"unknown skill kind {kind}")
     return fit(Z, y_tr, in_tr, in_va, state,
                FitCtx(spec=spec, X_tr=X_tr, seg_tr=seg_tr, cols=cols, rng=rng, cfg=cfg, seed=seed))
-
 

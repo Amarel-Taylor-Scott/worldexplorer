@@ -215,6 +215,11 @@ class HarnessConfig:
     KNN_BANK: int = 25_000
     LADDER_MAX_ROUNDS: int = 80
     LADDER_SHRINK: float = 0.2
+    GREEDY_OLS_CAP: int = 48            # candidate features scanned by greedy_ols before final OLS
+    GREEDY_OLS_MIN_DELTA: float = 1e-4  # required inner-OOS corr improvement to keep next feature
+    GREEDY_OLS_TR_ROWS: int = 6000      # row cap for greedy feature-selection scan
+    GREEDY_OLS_VA_ROWS: int = 4000      # row cap for greedy validation scan
+    GREEDY_OLS_FALLBACK_K: int = 30     # fallback feature count if no greedy feature survives
     BAG_SUBSETS: int = 8
     MLP_MAX_ROWS: int = 60_000
     MLP_MAX_ITER: int = 25
@@ -552,5 +557,4 @@ class HarnessConfig:
 CFG = HarnessConfig()
 OUT = Path(CFG.OUT_DIR)
 OUT.mkdir(parents=True, exist_ok=True)
-
 
