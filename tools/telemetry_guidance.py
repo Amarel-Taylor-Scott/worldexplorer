@@ -65,6 +65,22 @@ def score_arg(value: str) -> dict[str, Any]:
     }
 
 
+def is_external_reference(score: dict[str, Any]) -> bool:
+    """True for leaderboard context that should not drive WE source weights."""
+    haystack = f"{score.get('filename', '')} {score.get('description', '')}".lower()
+    markers = (
+        "external reference",
+        "not worldexplorer",
+        "not world explorer",
+        "arunemble",
+    )
+    return any(marker in haystack for marker in markers)
+
+
+def is_weight_eligible(score: dict[str, Any]) -> bool:
+    return not is_external_reference(score)
+
+
 def load_scores_csv(path: Path) -> list[dict[str, Any]]:
     with path.open(newline="", encoding="utf-8") as f:
         rows = list(csv.DictReader(f))
@@ -230,6 +246,8 @@ def avg_run_value(runs: dict[str, dict[str, Any]], names: list[str], key: str) -
 
 
 def classify(row: dict[str, Any], champion_private: float, champion_public: float) -> str:
+    if row.get("is_external_reference"):
+        return "external_reference_only"
     private = row.get("private")
     public = row.get("public")
     if private is None:
@@ -314,6 +332,8 @@ def annotate_scores(
         row: dict[str, Any] = {
             "filename": filename,
             "description": score.get("description", ""),
+            "is_external_reference": is_external_reference(score),
+            "weight_eligible": is_weight_eligible(score),
             "private": private,
             "public": public,
             "private_delta_vs_champion": private_delta,
@@ -344,11 +364,14 @@ def annotate_scores(
         row["action"] = classify(row, champion_private, champion_public)
         rows.append(row)
 
-    private_weights = softmax(rows, "private", temperature=0.0014)
-    gen_weights = softmax(rows, "generalization_score", temperature=0.0016)
+    private_rows = [row for row in rows if row.get("weight_eligible")]
+    private_weights = softmax(private_rows, "private", temperature=0.0014)
+    gen_weights = softmax(private_rows, "generalization_score", temperature=0.0016)
+    private_by_id = {id(row): private_weights[i] for i, row in enumerate(private_rows)}
+    gen_by_id = {id(row): gen_weights[i] for i, row in enumerate(private_rows)}
     for i, row in enumerate(rows):
-        row["private_replay_weight"] = round(private_weights[i], 6)
-        row["generalization_weight"] = round(gen_weights[i], 6)
+        row["private_replay_weight"] = round(private_by_id.get(id(row), 0.0), 6)
+        row["generalization_weight"] = round(gen_by_id.get(id(row), 0.0), 6)
     return rows
 
 
@@ -441,6 +464,7 @@ def build_guidance(rows: list[dict[str, Any]], champion: dict[str, Any]) -> dict
         "notes": [
             "Use private_replay weights when mining this completed competition for lessons.",
             "Use generalization weights when choosing the next live submission blend.",
+            "External reference rows are kept as aspiration/context and receive zero direct source weight.",
             "Do not give raw blend failures zero value: keep them as anti-priors for naive rank averaging.",
         ],
     }
@@ -467,7 +491,8 @@ def markdown_report(rows: list[dict[str, Any]], guidance: dict[str, Any]) -> str
             f"- {row['filename']}: {row['action']}; "
             f"private={row.get('private')}, public={row.get('public')}, "
             f"generalization_weight={row.get('generalization_weight')}, "
-            f"source={row.get('source_runs') or 'unknown'}"
+            f"source={row.get('source_runs') or 'unknown'}, "
+            f"eligible={row.get('weight_eligible')}"
         )
     lines.extend(["", "## Config Biases", ""])
     for key, item in guidance["sprout_config_biases"].items():
@@ -503,10 +528,12 @@ def main(argv=None) -> int:
         champion_private = as_float(champion.get("private"))
     if champion_public is None:
         champion_public = as_float(champion.get("public"))
+    eligible_scores = [s for s in scores if is_weight_eligible(s)]
+    champion_pool = eligible_scores or scores
     if champion_private is None:
-        champion_private = max((s["private"] for s in scores if s.get("private") is not None), default=None)
+        champion_private = max((s["private"] for s in champion_pool if s.get("private") is not None), default=None)
     if champion_public is None:
-        champion_public = max((s["public"] for s in scores if s.get("public") is not None), default=None)
+        champion_public = max((s["public"] for s in champion_pool if s.get("public") is not None), default=None)
     if champion_private is None or champion_public is None:
         sys.exit("could not infer champion scores")
     champion = {
