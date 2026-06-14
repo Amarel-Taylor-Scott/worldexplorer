@@ -66,8 +66,14 @@ python tools/publish.py submit /home/username/drw_out/submission.csv -m "v36 run
 
 ## C. The thin Kaggle kernel (after the engine is published)
 
-- **Internet ON** competitions: paste `kaggle/bootstrap_kernel.py`, set
-  `CONFIG["repo"]` to `git+https://github.com/Amarel-Taylor-Scott/worldexplorer.git`.
+- **Internet ON** competitions: generate a slim kernel instead of pasting the
+  engine:
+  ```bash
+  python tools/fleet.py bootstrap --name wx-github-v020 --internet \
+    --repo git+https://github.com/taylorsamarel/worldexplorer.git \
+    --repo-ref v0.2.0 --time-budget 120
+  python tools/fleet.py push --manifest /home/username/new_algo/kaggle/fleet/wx-github-v020_manifest.json
+  ```
 - **Internet OFF** (DRW, code competitions): `Add Input` → your
   `worldexplorer-engine` dataset, then paste `kaggle/bootstrap_kernel.py`
   (it auto-finds the attached package). See `PUBLISH.md` for the full flow.

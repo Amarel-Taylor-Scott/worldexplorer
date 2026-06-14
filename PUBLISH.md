@@ -29,11 +29,41 @@ Pin releases with tags so a notebook can request an exact version:
 git tag v0.2.0 && git push origin v0.2.0
 ```
 
+There is also a credential-aware helper:
+
+```bash
+python tools/publish.py github --repo worldexplorer
+```
+
+It expects `GITHUB_OWNER` and `GITHUB_TOKEN` in
+`~/.config/worldexplorer/.env`. Without a reachable remote, GitHub-backed
+Kaggle kernels will build locally but fail on Kaggle when `pip install` tries to
+fetch the package.
+
 ## 2A. Run on Kaggle WITH Internet (the simple path)
 
 Paste `kaggle/bootstrap_kernel.py` into one cell, set `CONFIG["repo"]` to your
 repo URL (add `@v0.2.0` to pin), set `data_root`/`target`, and run. The cell
 `pip install`s the engine from GitHub and runs it.
+
+The fleet tool can generate the same slim kernel directory plus metadata and a
+pushable manifest:
+
+```bash
+python tools/fleet.py bootstrap \
+  --name wx-github-v020 \
+  --internet \
+  --repo git+https://github.com/taylorsamarel/worldexplorer.git \
+  --repo-ref v0.2.0 \
+  --time-budget 120 \
+  --override SEED=7
+
+python tools/fleet.py push \
+  --manifest /home/username/new_algo/kaggle/fleet/wx-github-v020_manifest.json
+```
+
+Use a tag or commit SHA for `--repo-ref` when the run needs provenance. Branch
+names like `main`/`master` are convenient for development but mutable.
 
 ## 2B. Run on Kaggle WITHOUT Internet (DRW + code competitions)
 
@@ -54,6 +84,21 @@ Then in the notebook: **Add Input → your `worldexplorer-engine` dataset**, pas
 the bootstrap cell, and leave `CONFIG["engine_dataset"] = None` (the cell
 auto-finds any attached folder containing `worldexplorer/__init__.py`) — or set
 it explicitly to e.g. `/kaggle/input/worldexplorer-engine`.
+
+The generated-kernel version is:
+
+```bash
+python tools/fleet.py bootstrap \
+  --name wx-dataset-v020 \
+  --engine-dataset /kaggle/input/worldexplorer-engine \
+  --dataset taylorsamarel/worldexplorer-engine \
+  --repo git+https://github.com/taylorsamarel/worldexplorer.git \
+  --repo-ref v0.2.0 \
+  --time-budget 120
+```
+
+That keeps `enable_internet=false` and loads the package from the attached
+dataset. It is the safer shape for code competitions that block network access.
 
 ## 3. The CONFIG
 
