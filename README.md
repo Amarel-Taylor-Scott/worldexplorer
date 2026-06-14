@@ -315,6 +315,9 @@ feature-space operators
 projection bases
 route-strength estimates
 residual fields
+validation-budget ledgers
+evidence gates
+proof-carrying paths
 grokking candidates
 contradiction graphs
 checkpoint lineage
@@ -325,6 +328,28 @@ The main tool for this direction is:
 ```bash
 python tools/memory_matrices.py
 ```
+
+The material-field framing is deliberately general:
+
+```text
+features, regions, projections, residual pockets, and route effects are
+derived material particles with support, composition, evidence, risk, and
+provenance.
+```
+
+This does not mean every strange signal becomes a new foundation. The atlas
+uses an evidence ladder:
+
+```text
+A supported candidate
+B branch with independent retest
+C route-limited or quarantined
+D rejected or hazard memory
+```
+
+Unsupported material operations stay branch-only until they survive independent
+validation, parent/sibling ablation, false-agreement checks, and foundation
+stress checks.
 
 ### Fleet and Kaggle workflow
 

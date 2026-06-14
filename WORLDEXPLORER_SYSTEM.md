@@ -306,6 +306,110 @@ features agree only due to leakage or shift
 features become useful only after a transformation
 ```
 
+## Material Field Formalism
+
+WorldExplorer can describe the feature space as loose heterogeneous material,
+but the metaphor has a strict mathematical meaning. A material is not an
+accepted story. It is a scoped, derived signal component with support,
+composition, evidence, risk, and provenance.
+
+```text
+MaterialParticle p =
+{
+  support_mask      m_p over rows or regions,
+  activation_vector v_p,
+  feature_mix       a_p over original/derived columns,
+  region_mix        r_p over terrain partitions,
+  label_relation    beta_p or attribution summary,
+  stability         survival under changed worlds,
+  impurity          leakage/shift/noise/confounding risk,
+  reactivity        useful interactions with other particles/operators,
+  provenance        source run, operator, parent checkpoint
+}
+```
+
+The material inventory is a derived representation:
+
+```text
+raw evidence stays immutable
+derived material worlds may branch
+operators reshape derived material only
+every reshape must leave an impact record
+```
+
+This keeps the idea general. A material can be a feature, feature community,
+region-local feature, residual pocket, projection direction, model-family
+disagreement, or route-carve effect. It should not become a hard-coded theory
+about one competition or one model family.
+
+Material operations are typed hypotheses:
+
+```text
+sift        select/filter/downweight
+wash        denoise/de-shift/impute
+grind       quantize/rank/bin/compress
+smelt       extract stable target-aligned signal
+alloy       combine materials into interactions/projections
+carve       isolate a region or pocket
+route       send a pocket to a specialist or blend
+polish      calibrate/residual-shape/output transform
+quarantine  suppress in scope while preserving provenance
+revive      retest old material under a new topology
+anneal      long-horizon branch/grokking incubation
+```
+
+None of these operations become foundation by default.
+
+## Evidence Ladder And Anti-Drift Rules
+
+WorldExplorer must avoid turning every interesting grain into a new branch.
+Branches are useful only when they are evidence-bearing and bounded.
+
+The evidence ladder is:
+
+```text
+D rejected/hazard memory
+  unsupported, high drift, high false-agreement risk, or high stress
+
+C route-limited or quarantined
+  local signal exists but global support is weak or scope is narrow
+
+B branch with independent retest
+  promising local/global signal, but not enough independent support
+
+A supported candidate
+  local signal, global effect, worst-world proxy, low drift, and support agree
+```
+
+Promotion is allowed only after a candidate satisfies the relevant gates:
+
+```text
+independent seed/split/world confirmation
+parent and sibling ablation
+worst-world floor checked
+false agreement checked
+overfit and complexity controlled
+foundation stress not increased without branch reason
+private/public or forward gap not a trap
+```
+
+The default for a weird but interesting branch is:
+
+```text
+branch-only
+```
+
+not:
+
+```text
+main-world edit
+```
+
+The system should also track validation-world reuse. If the same validation
+world, route-carve review surface, or external score context is used many
+times, its selection value is discounted until a new independent world or
+mutated adversarial split confirms the move.
+
 ## Viewports, Families, And Transforms
 
 WorldExplorer does not train one model on all features. It creates viewports:
@@ -519,6 +623,9 @@ surface_surgery_matrix.csv
 impact_field_matrix.csv
 foundation_stress_matrix.csv
 route_strength_matrix.csv
+validation_budget_ledger.csv
+evidence_gate_matrix.csv
+proof_carrying_paths.jsonl
 contradiction_graph.csv
 grokking_incubation_matrix.csv
 projection_memory_matrix.csv
@@ -547,6 +654,9 @@ surface edits
 impact fields
 foundation stress
 route/action strengths
+validation-world reuse pressure
+evidence gates
+proof-carrying candidates
 contradictions
 grokking incubators
 next-runtime policy
@@ -657,6 +767,43 @@ alternate label treatment
 alternate projection
 alternate causal/environment split
 ```
+
+## Validation Budget And Evidence Gates
+
+The atlas now separates exploration from acceptance with explicit guard
+artifacts:
+
+```text
+validation_budget_ledger.csv
+evidence_gate_matrix.csv
+proof_carrying_paths.jsonl
+```
+
+`validation_budget_ledger.csv` records visible validation surfaces, how many
+candidates have been searched against them, and how much to discount them as
+independent evidence.
+
+`evidence_gate_matrix.csv` turns each impact field into a branch/promotion
+decision:
+
+```text
+local effect
+global effect
+worst-world proxy
+independent support
+false-agreement risk
+false-disagreement risk
+overfit risk
+foundation stress
+branch priority
+evidence grade
+decision
+```
+
+`proof_carrying_paths.jsonl` stores evidence/risk certificates for candidate
+paths and operations. A proof object is not a proof of truth; it is a compact,
+machine-checkable record of what supports the candidate, what risks remain,
+and what must be true before promotion.
 
 ## Contradiction Graph
 

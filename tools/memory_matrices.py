@@ -13,6 +13,9 @@ memory stores:
 - impact_field_matrix.csv: local/global ripple effects from candidate moves.
 - foundation_stress_matrix.csv: pressure that the current surface foundation is wrong.
 - route_strength_matrix.csv: learned value estimates for reusable action types.
+- validation_budget_ledger.csv: validation-world reuse pressure and trust discounts.
+- evidence_gate_matrix.csv: branch admission and promotion gate decisions.
+- proof_carrying_paths.jsonl: machine-readable evidence/risk certificates for candidates.
 - contradiction_graph.csv: supports/contradicts/revives claim edges.
 - grokking_incubation_matrix.csv: quarantined long-horizon branch records.
 - projection_memory_matrix.csv: dimensionality-reduction/transform memory.
@@ -162,6 +165,34 @@ ROUTE_STRENGTH_NUMERIC_COLUMNS = [
     "fragility",
     "complementarity",
     "branch_value",
+]
+
+VALIDATION_BUDGET_NUMERIC_COLUMNS = [
+    "candidate_count_seen",
+    "selection_use_count",
+    "reporting_use_count",
+    "reuse_pressure",
+    "redundancy_pressure",
+    "trust_discount",
+    "remaining_trust_budget",
+]
+
+EVIDENCE_GATE_NUMERIC_COLUMNS = [
+    "local_effect",
+    "global_effect",
+    "worst_world_proxy",
+    "support_count",
+    "independent_support",
+    "false_agreement_risk",
+    "false_disagreement_risk",
+    "overfit_risk",
+    "foundation_stress_delta",
+    "branch_priority",
+    "evidence_score",
+    "drift_risk",
+    "promotion_allowed",
+    "branch_allowed",
+    "grokking_allowed",
 ]
 
 GROKKING_NUMERIC_COLUMNS = [
@@ -1548,6 +1579,345 @@ def route_strength_matrix(
     return sorted(out, key=lambda r: f(r.get("branch_value")) or -999, reverse=True)
 
 
+def validation_budget_ledger(
+    run_rows: list[dict[str, Any]],
+    path_rows: list[dict[str, Any]],
+    operation_rows: list[dict[str, Any]],
+    score_rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Estimate validation-world reuse pressure.
+
+    This is intentionally conservative. It does not pretend to know every fold
+    used by the engine; it records visible selection surfaces so the next run
+    can discount worlds that are being optimized repeatedly.
+    """
+
+    eligible_scores = [row for row in score_rows if tg.is_weight_eligible(row)]
+    external_refs = [row for row in score_rows if not tg.is_weight_eligible(row)]
+    route_carves = [row for row in operation_rows if row.get("operation_type") == "route_carve"]
+    blends = [row for row in operation_rows if row.get("operation_type") == "blend"]
+    path_transforms = [row for row in operation_rows if row.get("operation_type") == "path_transform"]
+    robust_paths = [row for row in path_rows if f(row.get("robust_memory_score")) is not None]
+    promoted_paths = [row for row in path_rows if int(row.get("promoted") or 0)]
+    shipped_paths = [row for row in path_rows if int(row.get("shipped") or 0)]
+
+    specs = [
+        {
+            "validation_world": "external_private_score_context",
+            "world_kind": "external_score",
+            "rows": eligible_scores,
+            "selection_use_count": len(eligible_scores),
+            "reporting_use_count": len(score_rows),
+            "guard": "use as telemetry only; never as training label",
+        },
+        {
+            "validation_world": "external_public_score_context",
+            "world_kind": "external_score",
+            "rows": eligible_scores,
+            "selection_use_count": max(0, len(eligible_scores) // 2),
+            "reporting_use_count": len(score_rows),
+            "guard": "watch private/public gap; public-positive private-negative is a trap signal",
+        },
+        {
+            "validation_world": "external_reference_only",
+            "world_kind": "excluded_reference",
+            "rows": external_refs,
+            "selection_use_count": 0,
+            "reporting_use_count": len(external_refs),
+            "guard": "excluded from weight learning; comparative reference only",
+        },
+        {
+            "validation_world": "route_carve_review_surface",
+            "world_kind": "operation_review",
+            "rows": route_carves,
+            "selection_use_count": len(route_carves),
+            "reporting_use_count": len(route_carves),
+            "guard": "route-carves need parent/sibling ablation before main-world promotion",
+        },
+        {
+            "validation_world": "blend_review_surface",
+            "world_kind": "operation_review",
+            "rows": blends,
+            "selection_use_count": len(blends),
+            "reporting_use_count": len(blends),
+            "guard": "blend gains need leave-one-route-out and correlation-crowding checks",
+        },
+        {
+            "validation_world": "path_transform_review_surface",
+            "world_kind": "operation_review",
+            "rows": path_transforms,
+            "selection_use_count": len(path_transforms),
+            "reporting_use_count": len(path_transforms),
+            "guard": "transform gains need raw-parent and alternate-transform comparison",
+        },
+        {
+            "validation_world": "robust_memory_score_surface",
+            "world_kind": "internal_robust_oos",
+            "rows": robust_paths,
+            "selection_use_count": len(promoted_paths) + len(shipped_paths),
+            "reporting_use_count": len(robust_paths),
+            "guard": "discount if many candidates are searched against the same robust menu",
+        },
+        {
+            "validation_world": "runtime_artifact_surface",
+            "world_kind": "run_artifacts",
+            "rows": run_rows,
+            "selection_use_count": len(run_rows),
+            "reporting_use_count": len(run_rows),
+            "guard": "use for provenance and budget priors, not direct promotion",
+        },
+    ]
+
+    rows: list[dict[str, Any]] = []
+    total_ops = max(1, len(operation_rows))
+    for spec in specs:
+        count = len(spec["rows"])
+        selection = int(spec["selection_use_count"])
+        reporting = int(spec["reporting_use_count"])
+        reuse_pressure = clip01(selection / 25.0) or 0.0
+        redundancy_pressure = clip01(reporting / max(10.0, total_ops)) or 0.0
+        trust_discount = clip01(1.0 / (1.0 + reuse_pressure + 0.5 * redundancy_pressure)) or 0.0
+        remaining = clip01(1.0 - reuse_pressure) or 0.0
+        if spec["world_kind"] == "excluded_reference":
+            policy = "reference_only_never_weight"
+        elif reuse_pressure > 0.70:
+            policy = "mutate_or_hold_back; do_not_treat_as_independent"
+        elif reuse_pressure > 0.35:
+            policy = "discount_for_selection; require independent world"
+        elif count == 0:
+            policy = "inactive"
+        else:
+            policy = "usable_with_standard_guard"
+        rows.append({
+            "validation_world_id": stable_id("validation_world", spec["validation_world"]),
+            "validation_world": spec["validation_world"],
+            "world_kind": spec["world_kind"],
+            "candidate_count_seen": count,
+            "selection_use_count": selection,
+            "reporting_use_count": reporting,
+            "reuse_pressure": reuse_pressure,
+            "redundancy_pressure": redundancy_pressure,
+            "trust_discount": trust_discount,
+            "remaining_trust_budget": remaining,
+            "policy": policy,
+            "guard": spec["guard"],
+        })
+    return rows
+
+
+def evidence_grade(score: float, drift: float, support: float) -> str:
+    if score >= 0.72 and drift <= 0.22 and support >= 0.50:
+        return "A_supported_candidate"
+    if score >= 0.58 and drift <= 0.35:
+        return "B_branch_with_retest"
+    if score >= 0.42 and drift <= 0.50:
+        return "C_route_limited_or_quarantine"
+    return "D_reject_or_hazard_memory"
+
+
+def evidence_gate_matrix(
+    impact_rows: list[dict[str, Any]],
+    operation_rows: list[dict[str, Any]],
+    route_strength_rows: list[dict[str, Any]],
+    contradiction_rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    op_by_id = {row.get("operation_id"): row for row in operation_rows}
+    route_by_operator: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in route_strength_rows:
+        route_by_operator[str(row.get("operator_type"))].append(row)
+    contradictions_by_scope: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in contradiction_rows:
+        contradictions_by_scope[str(row.get("scope") or "")].append(row)
+
+    rows: list[dict[str, Any]] = []
+    for row in impact_rows:
+        source_id = row.get("source_id")
+        op = op_by_id.get(source_id, {})
+        operator = operation_operator_type(op) if op else str(row.get("operator_move") or "unknown")
+        route_support = route_by_operator.get(operator, [])
+        local = f(row.get("local_effect")) or 0.0
+        global_ = f(row.get("global_effect")) or 0.0
+        false_agree = f(row.get("false_agreement_risk")) or 0.0
+        false_disagree = f(row.get("false_disagreement_risk")) or 0.0
+        overfit = f(row.get("overfit_risk")) or 0.0
+        stress = f(row.get("foundation_stress_delta")) or 0.0
+        branch = f(row.get("branch_priority")) or 0.0
+        private = f(op.get("external_private"))
+        public = f(op.get("external_public"))
+        has_external = 1.0 if private is not None or public is not None else 0.0
+        public_private_gap = abs(private - public) if private is not None and public is not None else 0.0
+        support_count = len(route_support) + int(has_external)
+        independent_support = clip01(0.20 * support_count + 0.30 * has_external) or 0.0
+        contradiction_count = len(contradictions_by_scope.get(str(row.get("coordinate") or ""), []))
+        worst_world_proxy = clip01(min(global_, 1.0 - overfit, 1.0 - stress, 1.0 - public_private_gap)) or 0.0
+        drift = clip01(mean([false_agree, overfit, stress, public_private_gap, min(1.0, contradiction_count / 5.0)]) or 0.0) or 0.0
+        evidence = clip01(mean([
+            local,
+            global_,
+            worst_world_proxy,
+            branch * 0.75,
+            independent_support,
+            1.0 - drift,
+        ]) or 0.0) or 0.0
+        hard_hazard = stress > 0.55 or false_agree > 0.55 or overfit > 0.60
+        grade = "D_reject_or_hazard_memory" if hard_hazard else evidence_grade(evidence, drift, independent_support)
+        if not has_external and grade == "A_supported_candidate":
+            grade = "B_branch_with_retest"
+        promotion_allowed = int(
+            has_external
+            and grade == "A_supported_candidate"
+            and stress < 0.25
+            and false_agree < 0.18
+        )
+        branch_allowed = int(
+            grade in {"A_supported_candidate", "B_branch_with_retest"}
+            and drift < 0.45
+            and not hard_hazard
+        )
+        grokking_allowed = int(branch_allowed and branch > 0.55 and overfit < 0.35 and false_agree < 0.22)
+        if promotion_allowed:
+            decision = "candidate_retest_for_main_world"
+        elif branch_allowed:
+            decision = "branch_only_requires_independent_retest"
+        elif grade.startswith("C"):
+            decision = "route_limited_or_quarantine"
+        else:
+            decision = "reject_but_remember_as_hazard"
+        rows.append({
+            "evidence_gate_id": stable_id("evidence_gate", row.get("impact_id")),
+            "impact_id": row.get("impact_id"),
+            "surface_id": row.get("surface_id"),
+            "source_kind": row.get("source_kind"),
+            "source_id": source_id,
+            "coordinate": row.get("coordinate"),
+            "operator_move": row.get("operator_move"),
+            "local_effect": local,
+            "global_effect": global_,
+            "worst_world_proxy": worst_world_proxy,
+            "support_count": support_count,
+            "independent_support": independent_support,
+            "false_agreement_risk": false_agree,
+            "false_disagreement_risk": false_disagree,
+            "overfit_risk": overfit,
+            "foundation_stress_delta": stress,
+            "branch_priority": branch,
+            "evidence_score": evidence,
+            "drift_risk": drift,
+            "evidence_grade": grade,
+            "promotion_allowed": promotion_allowed,
+            "branch_allowed": branch_allowed,
+            "grokking_allowed": grokking_allowed,
+            "decision": decision,
+            "required_next_evidence": (
+                "independent seed/split plus parent/sibling ablation before promotion"
+                if not promotion_allowed else
+                "promotion still requires shipping court and sealed/forward confirmation"
+            ),
+            "artifact_source": row.get("artifact_source"),
+        })
+    return sorted(rows, key=lambda r: f(r.get("evidence_score")) or -999, reverse=True)
+
+
+def proof_carrying_paths(
+    path_rows: list[dict[str, Any]],
+    operation_rows: list[dict[str, Any]],
+    evidence_rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    evidence_by_source = {row.get("source_id"): row for row in evidence_rows}
+    proofs: list[dict[str, Any]] = []
+    for row in sorted(path_rows, key=lambda r: f(r.get("robust_memory_score")) or -999, reverse=True)[:80]:
+        robust = f(row.get("robust_memory_score"))
+        if robust is None:
+            continue
+        proof = {
+            "proof_id": stable_id("proof", "path", row.get("path_id")),
+            "candidate_id": row.get("path_id"),
+            "candidate_kind": "path",
+            "claim": "stable_path_candidate",
+            "evidence": {
+                "skill": row.get("skill"),
+                "family": row.get("family"),
+                "transform": row.get("transform"),
+                "oof_corr": row.get("oof_corr"),
+                "wf_corr": row.get("wf_corr"),
+                "robust_memory_score": robust,
+                "world_floor": row.get("world_floor"),
+                "world_frac_positive": row.get("world_frac_positive"),
+                "promoted": row.get("promoted"),
+                "shipped": row.get("shipped"),
+            },
+            "risks": {
+                "decay": row.get("decay"),
+                "overfit_ratio": row.get("overfit_ratio"),
+                "complexity": row.get("complexity"),
+                "roughness": row.get("roughness"),
+                "crowd_load": row.get("crowd_load"),
+            },
+            "scope": {
+                "run": row.get("run"),
+                "stage": row.get("stage"),
+                "artifact_source": row.get("artifact_source"),
+            },
+            "decision": (
+                "candidate_retest_for_main_world" if robust > 0.08
+                else "warm_prior_or_branch_only"
+            ),
+            "must_not_ship_until": [
+                "independent split/seed confirmation",
+                "worst-world floor checked",
+                "overfit and complexity gates checked",
+            ],
+        }
+        proofs.append(proof)
+
+    for row in sorted(operation_rows, key=lambda r: f(r.get("external_private")) or f(r.get("operation_strength")) or -999, reverse=True)[:120]:
+        evidence = evidence_by_source.get(row.get("operation_id"), {})
+        proof = {
+            "proof_id": stable_id("proof", "operation", row.get("operation_id")),
+            "candidate_id": row.get("operation_id"),
+            "candidate_kind": row.get("operation_type"),
+            "claim": "operation_may_improve_surface",
+            "evidence": {
+                "operation_name": row.get("operation_name"),
+                "operator_type": operation_operator_type(row),
+                "operation_strength": row.get("operation_strength"),
+                "external_private": row.get("external_private"),
+                "external_public": row.get("external_public"),
+                "route_information_gain": row.get("weight_route_information_gain"),
+                "evidence_grade": evidence.get("evidence_grade"),
+                "evidence_score": evidence.get("evidence_score"),
+                "independent_support": evidence.get("independent_support"),
+            },
+            "risks": {
+                "false_agreement_risk": evidence.get("false_agreement_risk"),
+                "overfit_risk": evidence.get("overfit_risk"),
+                "foundation_stress_delta": evidence.get("foundation_stress_delta"),
+                "drift_risk": evidence.get("drift_risk"),
+            },
+            "scope": {
+                "source_run": row.get("source_run"),
+                "operation_batch": row.get("operation_batch"),
+                "artifact_source": row.get("artifact_source"),
+            },
+            "decision": evidence.get("decision") or "unscored_requires_retest",
+            "must_not_ship_until": [
+                "parent/sibling ablation",
+                "independent seed or validation world",
+                "private-public or forward gap checked",
+                "false agreement and foundation stress below guardrails",
+            ],
+        }
+        proofs.append(proof)
+    return proofs
+
+
+def write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as file:
+        for row in rows:
+            file.write(json.dumps(row, sort_keys=True, default=str) + "\n")
+
+
 def contradiction_graph(
     surface_rows: list[dict[str, Any]],
     impact_rows: list[dict[str, Any]],
@@ -2011,6 +2381,8 @@ def write_numeric_bundle(
     projection_rows: list[dict[str, Any]],
     collinearity_rows: list[dict[str, Any]],
     operation_rows: list[dict[str, Any]],
+    validation_budget_rows: list[dict[str, Any]],
+    evidence_gate_rows: list[dict[str, Any]],
 ) -> dict[str, Any]:
     path_ids, path_x = numeric_matrix(path_rows, "path_id", PATH_NUMERIC_COLUMNS)
     typology_ids, typology_x = numeric_matrix(typology_rows, "typology_id", TYPOLOGY_NUMERIC_COLUMNS)
@@ -2029,6 +2401,12 @@ def write_numeric_bundle(
         collinearity_rows, "collinearity_id", COLLINEARITY_NUMERIC_COLUMNS
     )
     operation_ids, operation_x = numeric_matrix(operation_rows, "operation_id", OPERATION_NUMERIC_COLUMNS)
+    validation_ids, validation_x = numeric_matrix(
+        validation_budget_rows, "validation_world_id", VALIDATION_BUDGET_NUMERIC_COLUMNS
+    )
+    evidence_gate_ids, evidence_gate_x = numeric_matrix(
+        evidence_gate_rows, "evidence_gate_id", EVIDENCE_GATE_NUMERIC_COLUMNS
+    )
     typology_adjacency, typology_delta = typology_edge_matrices(typology_ids, vector_rows)
     path_controls = path_control_vectors(path_x)
     operation_controls = operation_control_vectors(operation_x)
@@ -2074,6 +2452,12 @@ def write_numeric_bundle(
         operation_names=np.asarray([str(row.get("operation_name", "")) for row in operation_rows], dtype=np.str_),
         operation_X=operation_x,
         operation_information_matrix=standardized_information_matrix(operation_x),
+        validation_budget_ids=validation_ids,
+        validation_budget_X=validation_x,
+        validation_budget_information_matrix=standardized_information_matrix(validation_x),
+        evidence_gate_ids=evidence_gate_ids,
+        evidence_gate_X=evidence_gate_x,
+        evidence_gate_information_matrix=standardized_information_matrix(evidence_gate_x),
         **operation_controls,
     )
 
@@ -2113,6 +2497,10 @@ def write_numeric_bundle(
             "collinearity_information_matrix": COLLINEARITY_NUMERIC_COLUMNS,
             "operation_X": OPERATION_NUMERIC_COLUMNS,
             "operation_information_matrix": OPERATION_NUMERIC_COLUMNS,
+            "validation_budget_X": VALIDATION_BUDGET_NUMERIC_COLUMNS,
+            "validation_budget_information_matrix": VALIDATION_BUDGET_NUMERIC_COLUMNS,
+            "evidence_gate_X": EVIDENCE_GATE_NUMERIC_COLUMNS,
+            "evidence_gate_information_matrix": EVIDENCE_GATE_NUMERIC_COLUMNS,
             "operation_strength_weight": "softmax over external/private score when present, else operation strength",
             "operation_exploration_bias": "normalized action gain/novelty/retest bias",
             "operation_hazard_bias": "normalized operation-level decay hazard",
@@ -2130,6 +2518,8 @@ def write_numeric_bundle(
             "projection_ids": "matches projection_memory_matrix.csv projection_id",
             "collinearity_ids": "matches collinearity_memory_matrix.csv collinearity_id",
             "operation_ids": "matches operation_memory_matrix.csv operation_id",
+            "validation_budget_ids": "matches validation_budget_ledger.csv validation_world_id",
+            "evidence_gate_ids": "matches evidence_gate_matrix.csv evidence_gate_id",
         },
     }
     (out_dir / "numeric_memory_schema.json").write_text(
@@ -2171,6 +2561,10 @@ def tensor_category(name: str) -> str:
         return "feature_space"
     if name.startswith("operation_"):
         return "operator_state"
+    if name.startswith("validation_budget_"):
+        return "validation_budget_state"
+    if name.startswith("evidence_gate_"):
+        return "evidence_gate_state"
     return "misc"
 
 
@@ -2663,6 +3057,42 @@ def next_runtime_policy(attn: dict[str, Any]) -> dict[str, Any]:
         }
         for row in attn.get("contradiction_attention", [])[:16]
     ]
+    evidence_queue = [
+        {
+            "priority": row.get("evidence_score"),
+            "grade": row.get("evidence_grade"),
+            "decision": row.get("decision"),
+            "required_next_evidence": row.get("required_next_evidence"),
+            "source": compact_row(
+                row,
+                [
+                    "evidence_gate_id",
+                    "impact_id",
+                    "source_kind",
+                    "coordinate",
+                    "operator_move",
+                    "artifact_source",
+                ],
+            ),
+        }
+        for row in attn.get("evidence_gate_attention", [])[:20]
+    ]
+    validation_budget = [
+        compact_row(
+            row,
+            [
+                "validation_world",
+                "world_kind",
+                "candidate_count_seen",
+                "reuse_pressure",
+                "trust_discount",
+                "remaining_trust_budget",
+                "policy",
+                "guard",
+            ],
+        )
+        for row in attn.get("validation_budget_attention", [])[:12]
+    ]
     collect_by_command: dict[str, dict[str, Any]] = {}
     for row in attn.get("grokking_incubation_attention", []):
         if str(row.get("record_status")) == "observed":
@@ -2691,6 +3121,8 @@ def next_runtime_policy(attn: dict[str, Any]) -> dict[str, Any]:
             "local_surface_edits_need_global_ripple_check": True,
             "contradictions_require_ablation_before_promotion": True,
             "hazards_are_masks_or_penalties_not_deletions": True,
+            "unsupported_material_operations_stay_branch_only": True,
+            "overused_validation_worlds_are_discounted": True,
         },
         "protected_priors": protected_priors,
         "hazard_exclusions": hazard_exclusions,
@@ -2699,6 +3131,8 @@ def next_runtime_policy(attn: dict[str, Any]) -> dict[str, Any]:
         "retest_queue": retest_queue,
         "reduction_queue": sorted(reduction_queue, key=lambda r: f(r.get("priority")) or -999, reverse=True)[:16],
         "contradiction_queue": contradiction_queue,
+        "evidence_gate_queue": evidence_queue,
+        "validation_budget": validation_budget,
         "collect_actions": collect_actions,
         "promotion_gates": [
             "independent_seed_or_split_reproduction",
@@ -2727,6 +3161,9 @@ def atlas_manifest(
     projection_rows: list[dict[str, Any]],
     collinearity_rows: list[dict[str, Any]],
     operation_rows: list[dict[str, Any]],
+    validation_budget_rows: list[dict[str, Any]],
+    evidence_gate_rows: list[dict[str, Any]],
+    proof_rows: list[dict[str, Any]],
     tensor_manifest: dict[str, Any],
 ) -> dict[str, Any]:
     return {
@@ -2751,6 +3188,8 @@ def atlas_manifest(
                 npz_ref("route_strength_information_matrix"),
                 npz_ref("grokking_incubation_information_matrix"),
                 npz_ref("operation_information_matrix"),
+                npz_ref("validation_budget_information_matrix"),
+                npz_ref("evidence_gate_information_matrix"),
             ],
             "phi": [
                 json_ref("projection_memory_matrix.csv"),
@@ -2774,6 +3213,8 @@ def atlas_manifest(
             "replay": "not yet emitted; future runs should store replay/core/hard/regression refs",
             "evaluation": [
                 json_ref("operation_memory_matrix.csv"),
+                json_ref("evidence_gate_matrix.csv"),
+                json_ref("proof_carrying_paths.jsonl"),
                 json_ref("attention_inputs.json"),
             ],
             "policy": [
@@ -2794,6 +3235,8 @@ def atlas_manifest(
                 npz_ref("foundation_stress_X"),
                 npz_ref("grokking_incubation_X"),
                 npz_ref("operation_exploration_bias"),
+                npz_ref("validation_budget_X"),
+                npz_ref("evidence_gate_X"),
             ],
         },
         "stores": {
@@ -2805,6 +3248,9 @@ def atlas_manifest(
             "strategy_store": json_ref("open_hypotheses.json"),
             "policy_store": json_ref("next_runtime_policy.json"),
             "impact_store": json_ref("impact_field_matrix.csv"),
+            "validation_budget_store": json_ref("validation_budget_ledger.csv"),
+            "evidence_gate_store": json_ref("evidence_gate_matrix.csv"),
+            "proof_store": json_ref("proof_carrying_paths.jsonl"),
             "contradiction_store": json_ref("contradiction_graph.csv"),
             "grokking_store": json_ref("grokking_incubation_matrix.csv"),
         },
@@ -2822,6 +3268,9 @@ def atlas_manifest(
             "projection_records": len(projection_rows),
             "collinearity_records": len(collinearity_rows),
             "operations": len(operation_rows),
+            "validation_worlds": len(validation_budget_rows),
+            "evidence_gates": len(evidence_gate_rows),
+            "proof_carrying_paths": len(proof_rows),
             "tensors": len(tensor_manifest.get("tensors", [])),
         },
         "branching_policy": {
@@ -2848,6 +3297,9 @@ def write_atlas_files(
     projection_rows: list[dict[str, Any]],
     collinearity_rows: list[dict[str, Any]],
     operation_rows: list[dict[str, Any]],
+    validation_budget_rows: list[dict[str, Any]],
+    evidence_gate_rows: list[dict[str, Any]],
+    proof_rows: list[dict[str, Any]],
     attn: dict[str, Any],
     numeric_schema: dict[str, Any],
 ) -> None:
@@ -2857,6 +3309,7 @@ def write_atlas_files(
         len(path_rows),
         len(typology_rows),
         len(operation_rows),
+        len(evidence_gate_rows),
         json.dumps(attn.get("external_score_context", []), sort_keys=True, default=str),
     )
     tensor_manifest = tensor_artifact_manifest(out_dir, numeric_schema)
@@ -2880,6 +3333,9 @@ def write_atlas_files(
         projection_rows,
         collinearity_rows,
         operation_rows,
+        validation_budget_rows,
+        evidence_gate_rows,
+        proof_rows,
         tensor_manifest,
     )
     (out_dir / "tensor_artifact_manifest.json").write_text(
@@ -2916,6 +3372,9 @@ def attention_inputs(
     projection_rows: list[dict[str, Any]],
     collinearity_rows: list[dict[str, Any]],
     operation_rows: list[dict[str, Any]],
+    validation_budget_rows: list[dict[str, Any]],
+    evidence_gate_rows: list[dict[str, Any]],
+    proof_rows: list[dict[str, Any]],
     score_rows: list[dict[str, Any]],
 ) -> dict[str, Any]:
     def top(rows: list[dict[str, Any]], key: str, n: int = 12) -> list[dict[str, Any]]:
@@ -2964,6 +3423,17 @@ def attention_inputs(
         "operation_strength",
         30,
     )
+    validation_budget = top(
+        [r for r in validation_budget_rows if f(r.get("reuse_pressure")) is not None],
+        "reuse_pressure",
+        16,
+    )
+    evidence_gates = top(
+        [r for r in evidence_gate_rows if f(r.get("evidence_score")) is not None],
+        "evidence_score",
+        30,
+    )
+    proof_candidates = proof_rows[:40]
 
     score_context = sorted(score_rows, key=lambda r: f(r.get("private")) or -999, reverse=True)
     return {
@@ -2990,6 +3460,9 @@ def attention_inputs(
         "projection_memory": projection_candidates,
         "collinearity_memory": collinearity_candidates,
         "operation_attention": operation_candidates,
+        "validation_budget_attention": validation_budget,
+        "evidence_gate_attention": evidence_gates,
+        "proof_carrying_paths": proof_candidates,
         "external_score_context": score_context,
         "numeric_memory_bundle": "numeric_memory_bundle.npz",
         "numeric_memory_schema": "numeric_memory_schema.json",
@@ -3000,6 +3473,9 @@ def attention_inputs(
         "impact_field_matrix": "impact_field_matrix.csv",
         "foundation_stress_matrix": "foundation_stress_matrix.csv",
         "route_strength_matrix": "route_strength_matrix.csv",
+        "validation_budget_ledger": "validation_budget_ledger.csv",
+        "evidence_gate_matrix": "evidence_gate_matrix.csv",
+        "proof_carrying_paths_jsonl": "proof_carrying_paths.jsonl",
         "contradiction_graph": "contradiction_graph.csv",
         "grokking_incubation_matrix": "grokking_incubation_matrix.csv",
         "open_hypotheses": "open_hypotheses.json",
@@ -3019,6 +3495,9 @@ def attention_inputs(
             "Which projection/reduction families widen useful signal instead of only sharpening spikes?",
             "Which collinear communities should be compressed, residualized, masked, or challenged?",
             "Which route/blend/path actions should become priors, anti-priors, or controlled ablations?",
+            "Which validation worlds have been reused enough to require discounting or mutation?",
+            "Which branches have enough evidence for A/B retest status, and which remain C/D hazards?",
+            "Which proof-carrying paths lack the evidence needed for promotion?",
             "Which public-positive/private-negative candidates identify public-specific traps?",
             "Which decay hazards should become negative features, masks, or route exclusions?",
         ],
@@ -3042,6 +3521,9 @@ def markdown_summary(attn: dict[str, Any], out_dir: Path) -> str:
         f"- `{(out_dir / 'impact_field_matrix.csv').name}`: ripple effects from each candidate surface/action move.",
         f"- `{(out_dir / 'foundation_stress_matrix.csv').name}`: foundation stress and rethink pressure.",
         f"- `{(out_dir / 'route_strength_matrix.csv').name}`: learned route/action value estimates.",
+        f"- `{(out_dir / 'validation_budget_ledger.csv').name}`: validation-world reuse pressure and trust discounts.",
+        f"- `{(out_dir / 'evidence_gate_matrix.csv').name}`: branch admission and promotion gate decisions.",
+        f"- `{(out_dir / 'proof_carrying_paths.jsonl').name}`: evidence/risk certificates for paths and operations.",
         f"- `{(out_dir / 'contradiction_graph.csv').name}`: supports/contradicts/revives claim edges.",
         f"- `{(out_dir / 'grokking_incubation_matrix.csv').name}`: quarantined long-horizon branches allowed to continue without early shipping.",
         f"- `{(out_dir / 'projection_memory_matrix.csv').name}`: dimensionality-reduction/transform evidence.",
@@ -3122,6 +3604,21 @@ def markdown_summary(attn: dict[str, Any], out_dir: Path) -> str:
             f"value={row.get('branch_value')} status={row.get('status')}"
         )
     lines.append("")
+    lines.append("Validation budget pressure:")
+    for row in attn.get("validation_budget_attention", [])[:8]:
+        lines.append(
+            f"- {row.get('validation_world')}: reuse={row.get('reuse_pressure')} "
+            f"discount={row.get('trust_discount')} policy={row.get('policy')}"
+        )
+    lines.append("")
+    lines.append("Evidence gates:")
+    for row in attn.get("evidence_gate_attention", [])[:8]:
+        lines.append(
+            f"- {row.get('source_kind')} {row.get('coordinate')}: "
+            f"grade={row.get('evidence_grade')} decision={row.get('decision')} "
+            f"score={row.get('evidence_score')}"
+        )
+    lines.append("")
     lines.append("Grokking incubators:")
     for row in attn.get("grokking_incubation_attention", [])[:8]:
         lines.append(
@@ -3185,6 +3682,9 @@ def main(argv=None) -> int:
     foundation_rows = foundation_stress_matrix(surface_rows, impact_rows)
     route_strength_rows = route_strength_matrix(operation_rows, impact_rows)
     contradiction_rows = contradiction_graph(surface_rows, impact_rows, projection_rows, operation_rows)
+    validation_budget_rows = validation_budget_ledger(run_rows, path_rows, operation_rows, scores)
+    evidence_gate_rows = evidence_gate_matrix(impact_rows, operation_rows, route_strength_rows, contradiction_rows)
+    proof_rows = proof_carrying_paths(path_rows, operation_rows, evidence_gate_rows)
     grokking_rows = grokking_incubation_matrix(fleet_dir)
     edges = relation_edges(run_rows, path_rows, scores, route_index, operation_rows)
     attn = attention_inputs(
@@ -3203,6 +3703,9 @@ def main(argv=None) -> int:
         projection_rows,
         collinearity_rows,
         operation_rows,
+        validation_budget_rows,
+        evidence_gate_rows,
+        proof_rows,
         scores,
     )
 
@@ -3217,6 +3720,9 @@ def main(argv=None) -> int:
     write_csv(out_dir / "impact_field_matrix.csv", impact_rows)
     write_csv(out_dir / "foundation_stress_matrix.csv", foundation_rows)
     write_csv(out_dir / "route_strength_matrix.csv", route_strength_rows)
+    write_csv(out_dir / "validation_budget_ledger.csv", validation_budget_rows)
+    write_csv(out_dir / "evidence_gate_matrix.csv", evidence_gate_rows)
+    write_jsonl(out_dir / "proof_carrying_paths.jsonl", proof_rows)
     write_csv(out_dir / "contradiction_graph.csv", contradiction_rows)
     write_csv(out_dir / "grokking_incubation_matrix.csv", grokking_rows)
     write_csv(out_dir / "projection_memory_matrix.csv", projection_rows)
@@ -3237,6 +3743,8 @@ def main(argv=None) -> int:
         projection_rows,
         collinearity_rows,
         operation_rows,
+        validation_budget_rows,
+        evidence_gate_rows,
     )
     write_atlas_files(
         out_dir,
@@ -3253,6 +3761,9 @@ def main(argv=None) -> int:
         projection_rows,
         collinearity_rows,
         operation_rows,
+        validation_budget_rows,
+        evidence_gate_rows,
+        proof_rows,
         attn,
         numeric_schema,
     )

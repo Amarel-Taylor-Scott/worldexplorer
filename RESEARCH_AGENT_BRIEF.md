@@ -774,6 +774,43 @@ Does it have independent promotion gates?
 Does it record failed incubation as evidence?
 ```
 
+### Material-Branch Drift
+
+WorldExplorer uses material language: features, regions, residual pockets,
+projections, and route effects can be treated as loose heterogeneous material
+that may be sifted, carved, alloyed, quarantined, revived, or annealed.
+
+This is a representation discipline, not permission to chase every odd signal.
+Every material operation must be scoped and reversible:
+
+```text
+raw evidence remains immutable
+derived material worlds can branch
+unsupported material operations remain branch-only
+local fixes must pay global rent
+validation-world reuse must be discounted
+```
+
+Attack points:
+
+```text
+interesting branch has no independent support
+local carve improves one pocket but raises foundation stress
+operator is reused because it worked once, not because it transferred
+validation surface has been optimized too many times
+material story becomes more specific than the evidence supports
+```
+
+Questions:
+
+```text
+What is the evidence grade: A, B, C, or D?
+Is the branch supported by a different seed, split, or validation world?
+Does the proof-carrying path record remaining risks?
+Is this a general material operation or a competition-specific superstition?
+Should this be main-world, branch-only, route-limited, quarantined, or rejected?
+```
+
 ## Suggested Research Improvements
 
 High-value directions:
@@ -808,6 +845,14 @@ High-value directions:
 8. Expand adversarial validators.
    Add more environment splits, null worlds, seed-stability tests, feature
    knockout tests, and branch comparison diagnostics.
+
+9. Add validation-budget accounting.
+   Track which validation worlds and review surfaces are being reused so
+   repeated adaptive search is discounted instead of counted as fresh evidence.
+
+10. Require proof-carrying candidates.
+    Every path or operator proposed for promotion should carry evidence,
+    remaining risks, scope, and must-not-ship-until gates.
 ```
 
 ## What Not To Do
@@ -832,6 +877,10 @@ Do not edit `worldexplorer/_engine.py` without syncing `engine_src/`.
 
 Do not let generated fleet kernels become the maintained source.
 
+Do not let material metaphors narrow the system into one domain-specific
+theory. Keep particles, operators, surfaces, and gates general across tabular,
+time, graph, retrieval, neural, tree, and hybrid routes.
+
 ## Review Questions For External Agents
 
 Use these as starting prompts:
@@ -845,6 +894,8 @@ Which local carves improve one region but harm the global topology?
 Which memory artifacts are summaries when they should be tensors/operators?
 Which failed paths should become durable anti-priors?
 Which grokking branches deserve more runway, and which are just overfitting?
+Which validation worlds are overused and need discounting or mutation?
+Which proof-carrying paths still lack independent evidence?
 How can the route-value matrix learn better from previous runs?
 What artifact would make the next run smarter instead of just more tuned?
 ```
