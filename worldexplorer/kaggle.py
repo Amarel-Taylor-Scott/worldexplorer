@@ -183,8 +183,10 @@ def run(config: "dict | None" = None) -> Any:
         sub = pd.read_csv(sub_path)
         tcol = cfg["submission_target_col"] or sub.columns[-1]
         if len(preds) != len(sub):
-            print(f"[worldexplorer.kaggle] WARNING: {len(preds)} predictions vs {len(sub)} "
-                  "sample_submission rows; aligning by position")
+            raise ValueError(
+                f"prediction length mismatch: {len(preds)} predictions for "
+                f"{len(sub)} sample_submission rows"
+            )
         sub[tcol] = preds[: len(sub)]
         sub.to_csv(os.path.join(out, "submission.csv"), index=False)
         if cfg["verbose"]:

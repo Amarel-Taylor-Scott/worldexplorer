@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -32,7 +33,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_KERNEL = ROOT.parent / "kaggle" / "drw_world_explorer_v36" / "kernel.py"
 DEFAULT_OUT = ROOT.parent / "kaggle" / "fleet"
-USER = "taylorsamarel"
+ENV_PATH = Path.home() / ".config" / "worldexplorer" / ".env"
 COMP = "drw-crypto-market-prediction"
 
 # A diverse sweep -- 3 GPU + 3 CPU -- varying the wide<->narrow lean (the open
@@ -52,11 +53,57 @@ def slug(name: str) -> str:
     return f"drw-wx-{name}"
 
 
-def _inject(kernel_text: str, ov: dict) -> str:
+def load_env() -> dict:
+    env = dict(os.environ)
+    if ENV_PATH.exists():
+        for line in ENV_PATH.read_text().splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, v = line.split("=", 1)
+                env.setdefault(k.strip(), v.strip())
+    return env
+
+
+def kaggle_user() -> str:
+    user = load_env().get("KAGGLE_USERNAME")
+    if not user:
+        sys.exit("missing KAGGLE_USERNAME (set it in ~/.config/worldexplorer/.env or env)")
+    return user
+
+
+def selected_members(a) -> list[dict]:
+    wanted = set(a.members or [])
+    if not wanted:
+        return list(FLEET)
+    names = {m["name"] for m in FLEET}
+    unknown = sorted(wanted - names)
+    if unknown:
+        sys.exit(f"unknown fleet member(s): {', '.join(unknown)}")
+    return [m for m in FLEET if m["name"] in wanted]
+
+
+def _inject(kernel_text: str, ov: dict, *, gpu: bool = False) -> str:
     """Append `CFG.<k> = <v>` overrides as the LAST thing before the run guard,
     so they win over the kernel's own built-in override block."""
     lines = "\n".join(f"CFG.{k} = {v!r}" for k, v in ov.items())
-    block = f"\n# ---- FLEET OVERRIDES (parallel-learning member) ----\n{lines}\n\n"
+    guard = ""
+    if gpu:
+        guard = """
+# Kaggle sometimes assigns older GPUs (for example P100/K80) to GPU-enabled
+# batch kernels. The installed torch build may not contain kernels for those
+# architectures; degrade those runs to the CPU-safe schedule instead of crashing.
+try:
+    _fleet_gpu_names = "|".join(_gpu_names()).lower()
+    if any(name in _fleet_gpu_names for name in ("p100", "k80")):
+        HAVE_TORCH = False
+        N_GPUS = 0
+        log("fleet_gpu_degraded", reason="unsupported_torch_gpu", gpu_names=_fleet_gpu_names)
+except Exception as _fleet_exc:
+    HAVE_TORCH = False
+    N_GPUS = 0
+    log("fleet_gpu_degraded", reason=f"gpu_probe_failed:{_fleet_exc}")
+"""
+    block = f"\n# ---- FLEET OVERRIDES (parallel-learning member) ----\n{lines}\n{guard}\n"
     anchor = 'if __name__ == "__main__":'
     i = kernel_text.rindex(anchor)
     return kernel_text[:i] + block + kernel_text[i:]
@@ -65,46 +112,57 @@ def _inject(kernel_text: str, ov: dict) -> str:
 def cmd_build(a) -> None:
     base = Path(a.kernel).read_text()
     out = Path(a.out)
+    user = kaggle_user()
     out.mkdir(parents=True, exist_ok=True)
-    for m in FLEET:
+    members = selected_members(a)
+    for m in members:
         d = out / m["name"]
         d.mkdir(parents=True, exist_ok=True)
-        (d / "kernel.py").write_text(_inject(base, m["ov"]))
+        (d / "kernel.py").write_text(_inject(base, m["ov"], gpu=bool(m["gpu"])))
         (d / "kernel-metadata.json").write_text(json.dumps({
-            "id": f"{USER}/{slug(m['name'])}", "title": f"DRW WX {m['name']}",
+            "id": f"{user}/{slug(m['name'])}", "title": f"DRW WX {m['name']}",
             "code_file": "kernel.py", "language": "python", "kernel_type": "script",
             "is_private": True, "enable_gpu": bool(m["gpu"]), "enable_internet": False,
             "competition_sources": [COMP]}, indent=2))
         print(f"built {m['name']:14s} {'GPU' if m['gpu'] else 'CPU'}  {m['ov']}")
-    print(f"\n{len(FLEET)} members -> {out}\n"
+    print(f"\n{len(members)} members -> {out}\n"
           f"next: python tools/fleet.py push --out {out}")
 
 
 def cmd_push(a) -> None:
     out = Path(a.out)
-    for m in FLEET:
+    failures = 0
+    for m in selected_members(a):
         d = out / m["name"]
         if not (d / "kernel.py").exists():
             print(f"skip {m['name']} (not built)"); continue
         print(f"+ kaggle kernels push -p {d}")
-        subprocess.run(["kaggle", "kernels", "push", "-p", str(d)], check=False)
-    print("\npushed; poll with: python tools/fleet.py status")
+        r = subprocess.run(["kaggle", "kernels", "push", "-p", str(d)], check=False)
+        failures += int(r.returncode != 0)
+    if failures:
+        print(f"\npush finished with {failures} failed member(s); retry with --members when slots free")
+    print("poll with: python tools/fleet.py status")
 
 
 def cmd_status(a) -> None:
-    for m in FLEET:
-        r = subprocess.run(["kaggle", "kernels", "status", f"{USER}/{slug(m['name'])}"],
+    user = kaggle_user()
+    for m in selected_members(a):
+        r = subprocess.run(["kaggle", "kernels", "status", f"{user}/{slug(m['name'])}"],
                            capture_output=True, text=True)
         print(f"{m['name']:14s} {(r.stdout + r.stderr).strip()[:90]}")
 
 
 def cmd_collect(a) -> None:
     out = Path(a.out)
-    for m in FLEET:
+    user = kaggle_user()
+    for m in selected_members(a):
         dest = out / m["name"] / "output"
         dest.mkdir(parents=True, exist_ok=True)
-        subprocess.run(["kaggle", "kernels", "output", f"{USER}/{slug(m['name'])}",
-                        "-p", str(dest)], check=False)
+        r = subprocess.run(["kaggle", "kernels", "output", f"{user}/{slug(m['name'])}",
+                           "-p", str(dest)], check=False)
+        if r.returncode != 0:
+            print(f"{m['name']:14s} output unavailable")
+            continue
         sub = dest / "submission.csv"
         if sub.exists():
             print(f"{m['name']:14s} submission.csv ready ({sub})")
@@ -119,10 +177,13 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="parallel Kaggle fleet launcher")
     sub = ap.add_subparsers(dest="action", required=True)
     b = sub.add_parser("build"); b.add_argument("--kernel", default=str(DEFAULT_KERNEL))
-    b.add_argument("--out", default=str(DEFAULT_OUT)); b.set_defaults(fn=cmd_build)
-    p = sub.add_parser("push"); p.add_argument("--out", default=str(DEFAULT_OUT)); p.set_defaults(fn=cmd_push)
-    s = sub.add_parser("status"); s.set_defaults(fn=cmd_status)
+    b.add_argument("--out", default=str(DEFAULT_OUT))
+    b.add_argument("--members", nargs="*", default=None); b.set_defaults(fn=cmd_build)
+    p = sub.add_parser("push"); p.add_argument("--out", default=str(DEFAULT_OUT))
+    p.add_argument("--members", nargs="*", default=None); p.set_defaults(fn=cmd_push)
+    s = sub.add_parser("status"); s.add_argument("--members", nargs="*", default=None); s.set_defaults(fn=cmd_status)
     c = sub.add_parser("collect"); c.add_argument("--out", default=str(DEFAULT_OUT))
+    c.add_argument("--members", nargs="*", default=None)
     c.add_argument("--submit", action="store_true"); c.set_defaults(fn=cmd_collect)
     a = ap.parse_args(argv)
     a.fn(a)

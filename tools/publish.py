@@ -46,8 +46,8 @@ def load_env() -> dict:
     return env
 
 
-def sh(cmd: list, **kw) -> subprocess.CompletedProcess:
-    print("+", " ".join(str(c) for c in cmd))
+def sh(cmd: list, *, display=None, **kw) -> subprocess.CompletedProcess:
+    print("+", " ".join(str(c) for c in (display or cmd)))
     return subprocess.run(cmd, check=True, **kw)
 
 
@@ -66,8 +66,28 @@ def cmd_github(a, env) -> None:
         print(f"created repo {owner}/{a.repo}")
     except Exception as e:
         print(f"repo create skipped ({e}); assuming it already exists")
-    push_url = f"https://{owner}:{tok}@github.com/{owner}/{a.repo}.git"
-    sh(["git", "-C", str(ROOT), "push", push_url, "HEAD:refs/heads/master"])
+    push_url = f"https://github.com/{owner}/{a.repo}.git"
+    with tempfile.TemporaryDirectory(prefix="wx_git_askpass_") as td:
+        askpass = Path(td) / "askpass.py"
+        askpass.write_text(
+            "#!/usr/bin/env python3\n"
+            "import os, sys\n"
+            "prompt = ' '.join(sys.argv[1:]).lower()\n"
+            "if 'username' in prompt:\n"
+            "    print(os.environ.get('GITHUB_OWNER', 'x-access-token'))\n"
+            "else:\n"
+            "    print(os.environ['GITHUB_TOKEN'])\n",
+            encoding="utf-8",
+        )
+        askpass.chmod(0o700)
+        git_env = dict(os.environ)
+        git_env.update({
+            "GIT_ASKPASS": str(askpass),
+            "GIT_TERMINAL_PROMPT": "0",
+            "GITHUB_OWNER": owner,
+            "GITHUB_TOKEN": tok,
+        })
+        sh(["git", "-C", str(ROOT), "push", push_url, "HEAD:refs/heads/master"], env=git_env)
     subprocess.run(["git", "-C", str(ROOT), "remote", "remove", "origin"],
                    stderr=subprocess.DEVNULL)
     subprocess.run(["git", "-C", str(ROOT), "remote", "add", "origin",

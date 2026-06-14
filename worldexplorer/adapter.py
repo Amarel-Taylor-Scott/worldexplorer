@@ -54,7 +54,10 @@ def _encode(train: pd.DataFrame, test: pd.DataFrame, cats: list) -> None:
     for c in cats:
         if c not in train.columns:
             continue
-        joint = pd.Categorical(pd.concat([train[c], test[c]], axis=0, ignore_index=True).astype(str))
+        pieces = [train[c]]
+        if c in test.columns:
+            pieces.append(test[c])
+        joint = pd.Categorical(pd.concat(pieces, axis=0, ignore_index=True).astype(str))
         train[c] = pd.Categorical(train[c].astype(str), categories=joint.categories).codes.astype(np.float32)
         if c in test.columns:
             test[c] = pd.Categorical(test[c].astype(str), categories=joint.categories).codes.astype(np.float32)
