@@ -36,10 +36,11 @@ CONFIG = {
     "overrides": {},               # any HarnessConfig field, e.g. {"WIDTH_BIAS_START": 0.8, "SEED": 7}
 }
 
-# ---- acquire worldexplorer: installed -> pip(GitHub) -> attached dataset ------
+# ---- acquire worldexplorer: attached wheel -> pip(GitHub) -> attached source --
 import glob
 import importlib
 import os
+import re
 import subprocess
 import sys
 
@@ -52,22 +53,69 @@ def _have() -> bool:
         return False
 
 
-if not _have():                                  # 1) Internet ON: pip straight from GitHub
-    try:
-        subprocess.run([sys.executable, "-m", "pip", "install", "-q", CONFIG["repo"]],
-                       check=True, timeout=900)
-    except Exception as e:
-        print("[bootstrap] pip-from-GitHub failed (Internet OFF?):", e)
-    importlib.invalidate_caches()
-
-if not _have():                                  # 2) Internet OFF: the repo attached as a dataset
+def _candidate_roots() -> list[str]:
     roots = []
     if CONFIG.get("engine_dataset"):
         roots.append(CONFIG["engine_dataset"])
     roots += [os.path.dirname(os.path.dirname(p))
               for p in glob.glob("/kaggle/input/*/worldexplorer/__init__.py")
               + glob.glob("/kaggle/input/*/*/worldexplorer/__init__.py")]
+    roots += [os.path.dirname(p)
+              for p in glob.glob("/kaggle/input/*/wheelhouse")
+              + glob.glob("/kaggle/input/*/*/wheelhouse")]
+    out = []
     for r in roots:
+        if r and r not in out:
+            out.append(r)
+    return out
+
+
+def _wheel_key(path: str):
+    name = os.path.basename(path)
+    m = re.search(r"worldexplorer-([^-]+)-", name)
+    if not m:
+        return ((), name)
+    parts = []
+    for p in re.split(r"[._+]", m.group(1)):
+        try:
+            parts.append(int(p))
+        except Exception:
+            parts.append(p)
+    return (parts, name)
+
+
+def _install_attached_wheel() -> bool:
+    wheels = []
+    for root in _candidate_roots():
+        wheels += glob.glob(os.path.join(root, "wheelhouse", "worldexplorer-*.whl"))
+        wheels += glob.glob(os.path.join(root, "worldexplorer-*.whl"))
+    wheels = sorted(set(wheels), key=_wheel_key)
+    if not wheels:
+        return False
+    wheel = wheels[-1]
+    try:
+        subprocess.run([sys.executable, "-m", "pip", "install", "-q",
+                        "--force-reinstall", "--no-deps", wheel],
+                       check=True, timeout=300)
+        print("[bootstrap] installed attached wheel", wheel)
+        importlib.invalidate_caches()
+        return _have()
+    except Exception as e:
+        print("[bootstrap] attached wheel install failed:", e)
+        return False
+
+
+if not _install_attached_wheel() and not _have():  # 1) Internet ON: pip straight from GitHub
+    try:
+        subprocess.run([sys.executable, "-m", "pip", "install", "-q", "--upgrade",
+                        "--no-cache-dir", CONFIG["repo"]],
+                       check=True, timeout=900)
+    except Exception as e:
+        print("[bootstrap] pip-from-GitHub failed (Internet OFF?):", e)
+    importlib.invalidate_caches()
+
+if not _have():                                  # 2) Internet OFF: the repo attached as a dataset
+    for r in _candidate_roots():
         if os.path.exists(os.path.join(r, "worldexplorer", "__init__.py")):
             sys.path.insert(0, r)
             print("[bootstrap] using attached worldexplorer at", r)

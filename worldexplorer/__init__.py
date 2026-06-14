@@ -20,7 +20,7 @@ from . import kaggle                 # thin Kaggle entrypoint: wx.kaggle.run(CON
 
 run_kaggle = kaggle.run              # convenience alias
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"
 __all__ = ["explore", "profile", "Result", "DataProfile", "AutoExplorer",
            "kaggle", "run_kaggle", "__version__"]
 

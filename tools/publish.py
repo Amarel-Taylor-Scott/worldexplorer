@@ -101,6 +101,15 @@ def cmd_kaggle_dataset(a, env) -> None:
         sys.exit("missing KAGGLE_USERNAME")
     payload = Path(tempfile.mkdtemp(prefix="wx_ds_")) / "d"
     (payload / "worldexplorer").mkdir(parents=True)
+    (payload / "wheelhouse").mkdir(parents=True)
+    try:
+        sh([sys.executable, "-m", "pip", "wheel", "--no-build-isolation", "--no-deps", "-w",
+            str(payload / "wheelhouse"), str(ROOT)])
+        wheels = sorted((payload / "wheelhouse").glob("worldexplorer-*.whl"))
+        if wheels:
+            (payload / "LATEST_WHEEL.txt").write_text(wheels[-1].name + "\n", encoding="utf-8")
+    except Exception as e:
+        print(f"wheel build skipped ({e}); source-package fallback will remain available")
     for p in (ROOT / "worldexplorer").glob("*.py"):       # the importable package only
         shutil.copy(p, payload / "worldexplorer" / p.name)
     (payload / "dataset-metadata.json").write_text(json.dumps(
