@@ -9,6 +9,9 @@ repo (GitHub)  ──pip install / dataset──▶  Kaggle thin cell  ──▶
    worldexplorer/  (engine + adapter + kaggle.run)         CONFIG only
 ```
 
+See `SOURCE_OF_TRUTH.md` for the exact rule: GitHub owns the logic; Kaggle owns
+only launch configuration and package acquisition.
+
 ## 1. Publish the repo to GitHub (one time)
 
 This directory is already a git repo with everything committed (the vendored
@@ -52,7 +55,6 @@ pushable manifest:
 ```bash
 python tools/fleet.py bootstrap \
   --name wx-github-v020 \
-  --internet \
   --repo git+https://github.com/Amarel-Taylor-Scott/worldexplorer.git \
   --repo-ref v0.2.0 \
   --time-budget 120 \
@@ -90,6 +92,8 @@ The generated-kernel version is:
 ```bash
 python tools/fleet.py bootstrap \
   --name wx-dataset-v020 \
+  --offline \
+  --source-policy wheel_first \
   --engine-dataset /kaggle/input/worldexplorer-engine \
   --dataset taylorsamarel/worldexplorer-engine \
   --repo git+https://github.com/Amarel-Taylor-Scott/worldexplorer.git \
@@ -105,6 +109,7 @@ dataset. It is the safer shape for code competitions that block network access.
 | key | meaning | default |
 |---|---|---|
 | `repo` | `git+https://github.com/<you>/worldexplorer.git[@tag]` | — |
+| `source_policy` | `github_first` / `wheel_first` / `github_only` / `wheel_only` | `github_first` |
 | `engine_dataset` | offline: path to the attached repo dataset (None = auto-find) | None |
 | `data_root` | competition input dir (None = auto-detect the dir holding train+test) | None |
 | `target` | column to predict (None = auto-detect) | None |

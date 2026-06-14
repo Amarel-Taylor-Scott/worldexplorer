@@ -73,7 +73,27 @@ pip install -e .            # core (numpy/pandas/scikit-learn/pyarrow)
 pip install -e .[full]      # + torch, lightgbm, xgboost, scipy, psutil (GPU + boosting)
 ```
 
-The engine (`worldexplorer/_engine.py`) is amalgamated from the modular source by `build.py`; re‑sync with `python sync_engine.py`.
+The engine (`worldexplorer/_engine.py`) is amalgamated from the modular source
+by `sync_engine.py`; re-sync with `python sync_engine.py`.
+
+## Source of truth
+
+GitHub is the source of truth for WorldExplorer logic: engine modules, package
+API, fleet strategy, memory/atlas tooling, telemetry guidance, route-carve
+experiments, and the slim Kaggle bootstrap template all live in this repo.
+
+Kaggle notebooks are launch surfaces. The preferred notebook contains only
+`CONFIG`, package acquisition, `import worldexplorer as wx`, and
+`wx.kaggle.run(CONFIG)`.
+
+For external review, adversarial validation, and improvement work, send agents
+[RESEARCH_AGENT_BRIEF.md](RESEARCH_AGENT_BRIEF.md).
+
+See [SOURCE_OF_TRUTH.md](SOURCE_OF_TRUTH.md). To check the guardrail locally:
+
+```bash
+python tools/source_audit.py
+```
 
 ---
 

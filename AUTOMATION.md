@@ -1,39 +1,16 @@
 # worldexplorer — automation, publishing & submitting
 
-Everything external (publish code, run on Kaggle, submit) goes through one
-script — `tools/publish.py` — which reads your credentials from a local vault
-(`~/.config/worldexplorer/.env`) so no token ever sits on a command line.
+Everything external (publish code, run on Kaggle, submit) goes through the
+repo tools. `tools/publish.py` reads credentials from the local vault
+(`~/.config/worldexplorer/.env`), while normal Git pushes use the configured Git
+remote/credential helper.
 
-The Claude Code safety classifier **blocks the agent** from bulk-exporting code
-to external services (GitHub push, Kaggle dataset upload) — a hard boundary that
-your say-so in chat does not lift. Two ways around it, both below: **(A)** grant
-the agent the matching Bash allow-rules, or **(B)** run the commands yourself
-(guaranteed). Predictions-only actions (`submit`, `download`) are not code
-export and already work.
+GitHub is the source of truth for all WorldExplorer logic. Kaggle kernels should
+be slim launchers that fetch this repo, then call `wx.kaggle.run(CONFIG)`.
 
 ---
 
-## A. Let Claude run these actions (paste once)
-
-Merge these allow-rules into `~/.claude/settings.json`. Run this line in your
-terminal **or** type it in the Claude prompt prefixed with `!` (user-initiated,
-so it bypasses the agent guardrail):
-
-```bash
-python3 -c "import json,pathlib; p=pathlib.Path.home()/'.claude'/'settings.json'; s=json.loads(p.read_text()) if p.exists() else {}; a=s.setdefault('permissions',{}).setdefault('allow',[]); [a.append(r) for r in ['Bash(python tools/publish.py:*)','Bash(git push:*)','Bash(kaggle datasets create:*)','Bash(kaggle datasets version:*)','Bash(kaggle kernels push:*)','Bash(kaggle kernels status:*)','Bash(kaggle kernels output:*)','Bash(kaggle competitions submit:*)','Bash(kaggle competitions download:*)'] if r not in a]; p.write_text(json.dumps(s,indent=2)+chr(10)); print('allow rules:',len(a))"
-```
-
-> The two **code-export** rules (`git push`, `kaggle datasets create`) may still
-> be refused even with the rule (the classifier called them a *hard* boundary).
-> If so, use section **B**. The `submit` / `download` / `kernels status|output`
-> rules do take effect.
-
----
-
-## B. Run it yourself (always works)
-
-These are user-initiated, so the guardrail does not apply. Run in your terminal,
-or paste into the Claude prompt with a leading `!`.
+## A. Publish source to GitHub
 
 **Publish the repo to GitHub** (creates the repo if needed, pushes, leaves a
 clean token-less remote):
@@ -42,21 +19,46 @@ clean token-less remote):
 cd /home/username/new_algo/worldexplorer && python tools/publish.py github --repo worldexplorer
 ```
 
-**Publish the engine as a Kaggle dataset** (for the thin kernel on Internet-OFF
-competitions like DRW — pip-from-GitHub can't run there):
+Or push ordinary commits:
+
+```bash
+cd /home/username/new_algo/worldexplorer && git push origin master
+```
+
+## B. Publish the offline wheel/source mirror
+
+Use this only for Internet-OFF notebooks where pip-from-GitHub cannot run:
 
 ```bash
 cd /home/username/new_algo/worldexplorer && python tools/publish.py kaggle-dataset --slug worldexplorer-engine
 ```
 
-**Push + run a kernel on Kaggle GPU** (full self-contained kernel, competition
-data attached):
+## C. Push and run slim Kaggle kernels
+
+GitHub-first, internet-enabled kernel:
 
 ```bash
-cd /home/username/new_algo/worldexplorer && python tools/publish.py kernel-push ../kaggle/drw_world_explorer_v36/kernel.py --slug drw-world-explorer --gpu --comp drw-crypto-market-prediction
+cd /home/username/new_algo/worldexplorer
+python tools/fleet.py bootstrap --name wx-github-master --repo-ref master --time-budget 120
+python tools/fleet.py push --manifest /home/username/new_algo/kaggle/fleet/wx-github-master_manifest.json
 ```
 
-**Submit a predictions CSV** (works for the agent too — not code export):
+Offline, wheel/source-backed kernel:
+
+```bash
+cd /home/username/new_algo/worldexplorer
+python tools/fleet.py bootstrap \
+  --name wx-offline-wheel \
+  --offline \
+  --source-policy wheel_first \
+  --engine-dataset /kaggle/input/worldexplorer-engine \
+  --dataset taylorsamarel/worldexplorer-engine \
+  --repo-ref master \
+  --time-budget 120
+python tools/fleet.py push --manifest /home/username/new_algo/kaggle/fleet/wx-offline-wheel_manifest.json
+```
+
+## D. Submit a predictions CSV
 
 ```bash
 python tools/publish.py submit /home/username/drw_out/submission.csv -m "v36 run"
@@ -64,23 +66,24 @@ python tools/publish.py submit /home/username/drw_out/submission.csv -m "v36 run
 
 ---
 
-## C. The thin Kaggle kernel (after the engine is published)
+## E. The thin Kaggle kernel
 
 - **Internet ON** competitions: generate a slim kernel instead of pasting the
   engine:
   ```bash
-  python tools/fleet.py bootstrap --name wx-github-v020 --internet \
+  python tools/fleet.py bootstrap --name wx-github-master \
     --repo git+https://github.com/Amarel-Taylor-Scott/worldexplorer.git \
-    --repo-ref v0.2.0 --time-budget 120
-  python tools/fleet.py push --manifest /home/username/new_algo/kaggle/fleet/wx-github-v020_manifest.json
+    --repo-ref master --time-budget 120
+  python tools/fleet.py push --manifest /home/username/new_algo/kaggle/fleet/wx-github-master_manifest.json
   ```
 - **Internet OFF** (DRW, code competitions): `Add Input` → your
-  `worldexplorer-engine` dataset, then paste `kaggle/bootstrap_kernel.py`
-  (it auto-finds the attached package). See `PUBLISH.md` for the full flow.
+  `worldexplorer-engine` dataset, generate with `--offline --source-policy
+  wheel_first`, then paste or push `kaggle/bootstrap_kernel.py` through the
+  fleet tooling. See `PUBLISH.md` for the full flow.
 
 ---
 
-## D. Credentials
+## F. Credentials
 
 The vault is `~/.config/worldexplorer/.env` (chmod 600), git-ignored, holding
 `GITHUB_OWNER/GITHUB_TOKEN` and `KAGGLE_USERNAME/KAGGLE_API_TOKEN`. `publish.py`
