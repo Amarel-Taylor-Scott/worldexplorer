@@ -132,7 +132,7 @@ def cmd_kernel_push(a, env) -> None:
     shutil.copy(a.kernel, d / "kernel.py")
     meta = {"id": f"{owner}/{a.slug}", "title": a.slug.replace("-", " ").title(),
             "code_file": "kernel.py", "language": "python", "kernel_type": "script",
-            "is_private": True, "enable_gpu": bool(a.gpu), "enable_internet": False,
+            "is_private": True, "enable_gpu": bool(a.gpu), "enable_internet": bool(a.internet),
             "competition_sources": [a.comp] if a.comp else [],
             "dataset_sources": list(a.dataset or [])}
     (d / "kernel-metadata.json").write_text(json.dumps(meta, indent=2))
@@ -160,8 +160,14 @@ def main(argv=None) -> int:
 
     p = sub.add_parser("kernel-push"); p.add_argument("kernel")
     p.add_argument("--slug", default="drw-world-explorer"); p.add_argument("--gpu", action="store_true")
+    p.add_argument("--internet", dest="internet", action="store_true",
+                   help="allow the kernel to pull code from GitHub at runtime")
+    p.add_argument("--offline", dest="internet", action="store_false",
+                   help="disable internet; attach a wheel/source dataset instead")
     p.add_argument("--comp", default="drw-crypto-market-prediction")
-    p.add_argument("--dataset", nargs="*", default=None); p.set_defaults(fn=cmd_kernel_push)
+    p.add_argument("--dataset", nargs="*", default=None)
+    p.set_defaults(internet=True)
+    p.set_defaults(fn=cmd_kernel_push)
 
     s = sub.add_parser("submit"); s.add_argument("file")
     s.add_argument("--comp", default="drw-crypto-market-prediction")

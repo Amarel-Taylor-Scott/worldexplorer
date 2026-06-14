@@ -54,11 +54,11 @@ The real constraint is Kaggle runtime access:
 
 1. GitHub is the source of truth for code.
 2. Kaggle competition kernels often run with internet disabled.
-3. An internet-disabled Kaggle kernel cannot reliably `pip install` directly
-   from GitHub during execution.
-4. Therefore the slim Kaggle kernel should load the latest attached wheel from
-   a Kaggle Dataset mirror first, then fall back to GitHub only when internet is
-   available.
+3. An internet-enabled Kaggle kernel should pull the current package directly
+   from GitHub.
+4. An internet-disabled Kaggle kernel cannot reliably `pip install` directly
+   from GitHub during execution, so those notebooks need the attached wheel or
+   source dataset fallback.
 
 ## Current Implemented Setup
 
@@ -73,12 +73,30 @@ Kaggle Dataset
 
 Slim kernel.py
   -> minimal bootstrapper
-  -> installs latest attached wheel first
-  -> falls back to GitHub install when internet is available
+  -> installs from GitHub first when internet is enabled
+  -> falls back to attached wheel/source when needed
+  -> can be switched to wheel-first for offline notebooks
   -> falls back to attached source package if needed
 ```
 
-The slim bootstrap now searches attached Kaggle datasets for:
+The slim bootstrap now supports these acquisition policies:
+
+```text
+github_first  -> default; force-reinstall from GitHub, then attached wheel/source
+wheel_first   -> offline path; attached wheel/source first, then GitHub if available
+github_only   -> only try GitHub
+wheel_only    -> only try attached wheel/source
+```
+
+Generated slim breaker kernels default to:
+
+```text
+repo = git+https://github.com/Amarel-Taylor-Scott/worldexplorer.git@master
+source_policy = github_first
+enable_internet = true
+```
+
+For offline runs, the bootstrap searches attached Kaggle datasets for:
 
 ```text
 wheelhouse/worldexplorer-*.whl
@@ -129,6 +147,12 @@ worldexplorer-0.2.2-py3-none-any.whl
 
 I am not blocked from publishing to GitHub.
 
-The thing that must be handled carefully is Kaggle execution: for offline
-Kaggle kernels, the slim kernel has to install from the latest attached wheel,
-not assume it can pull live code from GitHub.
+The thing that must be handled carefully is Kaggle execution mode:
+
+```text
+normal slim kernel:   GitHub-first
+offline slim kernel:  wheel/source dataset-first
+```
+
+That keeps GitHub as the primary source of truth while still supporting
+internet-disabled notebook requirements.

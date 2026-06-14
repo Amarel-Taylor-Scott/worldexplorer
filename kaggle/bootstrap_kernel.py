@@ -4,15 +4,15 @@
 # Paste this WHOLE cell into one Kaggle code cell. It carries ONLY the config
 # (where the data is, the target, the budget) + how to fetch the engine. The
 # ~10k-line engine is no longer pasted -- it is downloaded from the public repo
-# (Internet ON) or read from an attached dataset (Internet OFF).
+# (Internet ON) or read from an attached dataset/wheel mirror (Internet OFF).
 #
 # HOW TO RUN
-#   A) INTERNET ON  (Settings -> Internet -> On): nothing else needed; the cell
-#      pip-installs worldexplorer from GitHub.
-#   B) INTERNET OFF (e.g. DRW, code competitions): upload the worldexplorer repo
-#      as a Kaggle Dataset once, then Add Input -> that dataset, and set
-#      CONFIG["engine_dataset"] to its path (or just leave it None -- the cell
-#      auto-finds any attached folder containing worldexplorer/__init__.py).
+#   A) INTERNET ON  (Settings -> Internet -> On): default. The cell force-
+#      reinstalls worldexplorer from GitHub, then runs.
+#   B) INTERNET OFF (e.g. code competitions): attach the worldexplorer wheel
+#      mirror/source dataset and set CONFIG["source_policy"] = "wheel_first".
+#      CONFIG["engine_dataset"] can point at that dataset path, or stay None
+#      if the bootstrap can auto-find it under /kaggle/input.
 #   SELF-IMPROVEMENT: also Add Input -> a PREVIOUS run's OUTPUT so the engine
 #      reads world_cairn.json / learning_ledger.json (and, for the v36 advisor
 #      loop, advisor_instructions.json). No code change -- it finds them itself.
@@ -21,6 +21,7 @@
 CONFIG = {
     # ---- where the logic comes from -------------------------------------------
     "repo": "git+https://github.com/Amarel-Taylor-Scott/worldexplorer.git",  # add @<tag> to pin a version
+    "source_policy": "github_first",  # "github_first" | "wheel_first" | "github_only" | "wheel_only"
     "engine_dataset": None,        # OFFLINE: path to an attached dataset that holds the worldexplorer/ pkg
                                    #          (None = auto-find any attached folder with worldexplorer/__init__.py)
     # ---- where the data is (None = auto-detect the competition input dir) ------
@@ -36,7 +37,7 @@ CONFIG = {
     "overrides": {},               # any HarnessConfig field, e.g. {"WIDTH_BIAS_START": 0.8, "SEED": 7}
 }
 
-# ---- acquire worldexplorer: attached wheel -> pip(GitHub) -> attached source --
+# ---- acquire worldexplorer: GitHub-first online; wheel/source fallback offline -
 import glob
 import importlib
 import os
@@ -105,28 +106,54 @@ def _install_attached_wheel() -> bool:
         return False
 
 
-if not _install_attached_wheel() and not _have():  # 1) Internet ON: pip straight from GitHub
+def _install_github() -> bool:
+    repo = CONFIG.get("repo")
+    if not repo:
+        return False
     try:
-        subprocess.run([sys.executable, "-m", "pip", "install", "-q", "--upgrade",
-                        "--no-cache-dir", CONFIG["repo"]],
+        subprocess.run([sys.executable, "-m", "pip", "install", "-q",
+                        "--upgrade", "--force-reinstall", "--no-deps",
+                        "--no-cache-dir", repo],
                        check=True, timeout=900)
+        print("[bootstrap] installed worldexplorer from GitHub", repo)
+        importlib.invalidate_caches()
+        return _have()
     except Exception as e:
         print("[bootstrap] pip-from-GitHub failed (Internet OFF?):", e)
-    importlib.invalidate_caches()
+        return False
 
-if not _have():                                  # 2) Internet OFF: the repo attached as a dataset
+
+def _use_attached_source() -> bool:
     for r in _candidate_roots():
         if os.path.exists(os.path.join(r, "worldexplorer", "__init__.py")):
             sys.path.insert(0, r)
-            print("[bootstrap] using attached worldexplorer at", r)
-            break
-    importlib.invalidate_caches()
+            print("[bootstrap] using attached worldexplorer source at", r)
+            importlib.invalidate_caches()
+            return _have()
+    return False
+
+
+policy = str(CONFIG.get("source_policy", "github_first")).lower()
+
+if policy == "github_first":
+    _install_github() or _install_attached_wheel() or _use_attached_source()
+elif policy == "wheel_first":
+    _install_attached_wheel() or _use_attached_source() or _install_github()
+elif policy == "github_only":
+    _install_github()
+elif policy == "wheel_only":
+    _install_attached_wheel() or _use_attached_source()
+else:
+    print("[bootstrap] unknown source_policy, using github_first:", policy)
+    _install_github() or _install_attached_wheel() or _use_attached_source()
+
+importlib.invalidate_caches()
 
 if not _have():
     raise SystemExit(
         "could not acquire worldexplorer. Either turn Internet ON (Settings -> Internet), "
-        "or upload the worldexplorer repo as a Kaggle Dataset, Add Input -> it, and set "
-        "CONFIG['engine_dataset'] to its path.")
+        "or attach the worldexplorer wheel/source dataset, set CONFIG['source_policy'] "
+        "to 'wheel_first', and set CONFIG['engine_dataset'] if auto-detection misses it.")
 
 import worldexplorer as wx
 

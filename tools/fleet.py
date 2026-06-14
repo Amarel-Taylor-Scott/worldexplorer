@@ -612,8 +612,10 @@ def cmd_bootstrap(a) -> None:
     user = kaggle_user()
     out.mkdir(parents=True, exist_ok=True)
 
+    source_policy = a.source_policy or ("github_first" if a.internet else "wheel_first")
     config = {
         "repo": _repo_with_ref(a.repo, a.repo_ref),
+        "source_policy": source_policy,
         "engine_dataset": a.engine_dataset,
         "data_root": a.data_root,
         "target": a.target,
@@ -655,7 +657,7 @@ def cmd_bootstrap(a) -> None:
         "name": a.name,
         "gpu": bool(a.gpu),
         "mode": "bootstrap",
-        "source_mode": "github" if a.internet else "attached_dataset",
+        "source_mode": source_policy,
         "repo": config["repo"],
         "engine_dataset": a.engine_dataset,
         "ov": overrides,
@@ -707,12 +709,14 @@ def cmd_breaker(a) -> None:
     manifest = Path(a.manifest) if a.manifest else out / f"{a.prefix}_manifest.json"
     repo = _repo_with_ref(a.repo, a.repo_ref)
     dataset_sources = list(a.dataset or [])
+    source_policy = a.source_policy or ("github_first" if a.internet else "wheel_first")
     for m in members:
         d = out / m["name"]
         d.mkdir(parents=True, exist_ok=True)
         shutil.rmtree(d / "__pycache__", ignore_errors=True)
         config = {
             "repo": repo,
+            "source_policy": source_policy,
             "engine_dataset": a.engine_dataset,
             "data_root": a.data_root,
             "target": a.target,
@@ -745,7 +749,7 @@ def cmd_breaker(a) -> None:
         )
         m["repo"] = repo
         m["engine_dataset"] = a.engine_dataset
-        m["source_mode"] = "github" if a.internet else "attached_dataset"
+        m["source_mode"] = source_policy
         print(f"breaker {m['name']:26s} {'GPU' if m['gpu'] else 'CPU'} mode={m['breaker_mode']} repo={repo}")
     manifest.write_text(
         json.dumps(
@@ -954,8 +958,13 @@ def main(argv=None) -> int:
     bs.add_argument("--repo-ref", default=None, help="commit SHA/tag/branch appended as @ref")
     bs.add_argument("--engine-dataset", default=None,
                     help="offline attached dataset path, e.g. /kaggle/input/worldexplorer-engine")
-    bs.add_argument("--internet", action="store_true",
+    bs.add_argument("--internet", dest="internet", action="store_true",
                     help="set Kaggle enable_internet=true so pip can install from GitHub")
+    bs.add_argument("--offline", dest="internet", action="store_false",
+                    help="set Kaggle enable_internet=false and prefer attached wheel/source")
+    bs.add_argument("--source-policy", choices=["github_first", "wheel_first", "github_only", "wheel_only"],
+                    default=None,
+                    help="override package acquisition order injected into CONFIG")
     bs.add_argument("--gpu", action="store_true")
     bs.add_argument("--competition", default=COMP)
     bs.add_argument("--dataset", nargs="*", default=None,
@@ -975,6 +984,7 @@ def main(argv=None) -> int:
     bs.add_argument("--override", action="append", default=[],
                     help="HarnessConfig override as KEY=JSON_VALUE, e.g. --override SEED=7")
     bs.add_argument("--manifest", default=None)
+    bs.set_defaults(internet=True)
     bs.set_defaults(fn=cmd_bootstrap)
     b = sub.add_parser("build"); b.add_argument("--kernel", default=str(DEFAULT_KERNEL))
     b.add_argument("--out", default=str(DEFAULT_OUT))
@@ -1003,14 +1013,18 @@ def main(argv=None) -> int:
     br.add_argument("--gpu-frac", type=float, default=0.0)
     br.add_argument("--time-budget", type=float, default=180.0)
     br.add_argument("--repo", default="git+https://github.com/Amarel-Taylor-Scott/worldexplorer.git")
-    br.add_argument("--repo-ref", default="v0.2.2")
-    br.add_argument("--internet", action="store_true")
+    br.add_argument("--repo-ref", default="master")
+    br.add_argument("--internet", dest="internet", action="store_true")
+    br.add_argument("--offline", dest="internet", action="store_false")
+    br.add_argument("--source-policy", choices=["github_first", "wheel_first", "github_only", "wheel_only"],
+                    default=None)
     br.add_argument("--engine-dataset", default=None)
     br.add_argument("--dataset", nargs="*", default=None)
     br.add_argument("--competition", default=COMP)
     br.add_argument("--data-root", default=None)
     br.add_argument("--target", default="label")
     br.add_argument("--manifest", default=None)
+    br.set_defaults(internet=True)
     br.set_defaults(fn=cmd_breaker)
     p = sub.add_parser("push"); p.add_argument("--out", default=str(DEFAULT_OUT))
     p.add_argument("--manifest", default=None)
