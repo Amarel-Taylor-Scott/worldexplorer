@@ -1003,7 +1003,7 @@ def main(argv=None) -> int:
     br.add_argument("--gpu-frac", type=float, default=0.0)
     br.add_argument("--time-budget", type=float, default=180.0)
     br.add_argument("--repo", default="git+https://github.com/Amarel-Taylor-Scott/worldexplorer.git")
-    br.add_argument("--repo-ref", default="v0.2.1")
+    br.add_argument("--repo-ref", default="v0.2.2")
     br.add_argument("--internet", action="store_true")
     br.add_argument("--engine-dataset", default=None)
     br.add_argument("--dataset", nargs="*", default=None)
