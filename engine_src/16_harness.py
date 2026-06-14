@@ -227,7 +227,8 @@ class ExplorerHarness:
                 two_gpu_concurrency=N_GPUS >= 2)
         else:
             log("hardware_profile", schedule="cpu",
-                note="identical_v5_behavior" if not HAVE_TORCH else "torch_cpu_mlp_with_pearson_loss")
+                note=("identical_v5_behavior" if not HAVE_TORCH else "torch_cpu_mlp_with_pearson_loss"),
+                cuda_disabled_reason=GPU_DISABLED_REASON)
         rs.hetero = bool(rs.cfg.HETERO_PAIRING) and N_GPUS > 0
         if rs.hetero:
             log("hetero_lanes_enabled",
@@ -2041,5 +2042,4 @@ class ExplorerHarness:
             gate=rs.gate_fired, alarms=rs.summary["alarms"])
         print(json.dumps({k: v for k, v in rs.summary.items() if k != "honest_scores"}, indent=2, default=str))
         return rs.summary
-
 

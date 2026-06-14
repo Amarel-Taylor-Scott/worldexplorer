@@ -994,14 +994,38 @@ from sklearn.preprocessing import StandardScaler
 warnings.filterwarnings("ignore")
 
 # ---- hardware detection: same objective, schedule reshapes per device ------
+GPU_DISABLED_REASON = ""
 try:
     import torch
     HAVE_TORCH = True
     N_GPUS = torch.cuda.device_count() if torch.cuda.is_available() else 0
+    if N_GPUS > 0:
+        try:
+            _gpu_probe_names = [torch.cuda.get_device_name(i).lower() for i in range(N_GPUS)]
+        except Exception:
+            _gpu_probe_names = []
+        if any(("p100" in n or "k80" in n) for n in _gpu_probe_names):
+            GPU_DISABLED_REASON = "unsupported_kaggle_gpu:" + "|".join(_gpu_probe_names)
+            N_GPUS = 0
+        else:
+            try:
+                _dev = torch.device("cuda:0")
+                _probe = torch.ones(1, device=_dev)
+                _ = float((_probe + 1).detach().cpu().numpy()[0])
+                torch.cuda.synchronize(_dev)
+                del _probe
+            except Exception as _gpu_exc:
+                GPU_DISABLED_REASON = f"cuda_probe_failed:{type(_gpu_exc).__name__}:{str(_gpu_exc)[:120]}"
+                N_GPUS = 0
+                try:
+                    torch.cuda.empty_cache()
+                except Exception:
+                    pass
 except Exception:
     torch = None
     HAVE_TORCH = False
     N_GPUS = 0
+    GPU_DISABLED_REASON = "torch_import_failed"
 
 try:
     from lightgbm import LGBMRegressor
@@ -1089,5 +1113,4 @@ except Exception:
     HAVE_NNLS = False
 
 RUN_START = time.monotonic()
-
 
