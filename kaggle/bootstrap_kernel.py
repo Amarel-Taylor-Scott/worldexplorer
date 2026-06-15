@@ -40,6 +40,7 @@ CONFIG = {
 # ---- acquire worldexplorer: GitHub-first online; wheel/source fallback offline -
 import glob
 import importlib
+import json
 import os
 import re
 import subprocess
@@ -160,3 +161,30 @@ import worldexplorer as wx
 print("worldexplorer", wx.__version__, "ready")
 result = wx.kaggle.run(CONFIG)
 print(result)
+
+if (CONFIG.get("overrides") or {}).get("GROK_INCUBATION"):
+    _wx_report = {
+        "schema_version": 1,
+        "mode": "grokking_incubation",
+        "branch_mode": (CONFIG.get("overrides") or {}).get("GROK_BRANCH_MODE", "incubator"),
+        "ship_eligible": bool((CONFIG.get("overrides") or {}).get("GROK_SHIP_ELIGIBLE", False)),
+        "doctrine": "quarantined research lane; cannot ship without robust OOS court",
+        "config": {
+            "time_budget_min": CONFIG.get("time_budget_min"),
+            "overrides": CONFIG.get("overrides") or {},
+            "source_policy": CONFIG.get("source_policy"),
+            "repo": CONFIG.get("repo"),
+        },
+        "observed": getattr(result, "report", result if isinstance(result, dict) else {}),
+        "required_promotion_gates": [
+            "robust_score_beats_parent",
+            "worst_world_nonnegative",
+            "overfit_ratio_controlled",
+            "false_agreement_risk_checked",
+            "public_private_or_forward_gap_not_a_trap",
+        ],
+    }
+    _wx_report_path = os.path.join(CONFIG.get("out") or "/kaggle/working", "grokking_incubation_report.json")
+    with open(_wx_report_path, "w", encoding="utf-8") as _wx_f:
+        json.dump(_wx_report, _wx_f, indent=2, sort_keys=True, default=str)
+    print("[bootstrap] wrote", _wx_report_path)

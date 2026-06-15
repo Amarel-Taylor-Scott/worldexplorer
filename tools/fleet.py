@@ -15,6 +15,7 @@ Subcommands (build is local + safe; push/collect/submit hit Kaggle):
   python tools/fleet.py build   [--kernel K] [--out DIR]   # write one kernel dir per member
   python tools/fleet.py bootstrap --name NAME               # write a slim GitHub/dataset kernel
   python tools/fleet.py sprout  --count 8                  # stochastic, bounded experiment members
+  python tools/fleet.py revive  --count 6                  # old motifs + MLP grokking retests
   python tools/fleet.py push    [--out DIR]                # `kaggle kernels push` every member
   python tools/fleet.py status                             # poll every member's run
   python tools/fleet.py collect [--out DIR] [--submit]     # download outputs (+ submit each CSV)
@@ -166,6 +167,55 @@ BREAKER_WARM_GENOMES = [
     "bayes_ridge|pls_weight120_identity",
 ]
 
+REVIVAL_DOCTRINE = (
+    "Revival runs deliberately re-test old useful material through the current "
+    "WorldExplorer courts instead of treating old branches as dead. Old motifs "
+    "earn a fresh audition; neural/MLP grokking lanes are quarantined research "
+    "branches and cannot become main-world paths without current robust support."
+)
+
+REVIVAL_OLD_WARM_GENOMES = [
+    "greedy_ols|tail32_identity",
+    "greedy_ols|tail64_rank",
+    "greedy_ols|tail96_identity",
+    "linear_ols|tail80_identity",
+    "linear_pearson|tail96_identity",
+    "gpu_ridge_swarm|tail96_rank",
+    "gpu_ridge_swarm|medoid64_pair_aug",
+    "pls|tail120_identity",
+    "bayes_ridge|tail120_identity",
+    "ard_linear|medoid64_identity",
+    "bagged_linear|testlike_stable96_rank",
+    "bagged_linear|sign_stability96_rank",
+    "pls|pls_weight96_identity",
+    "bayes_ridge|pls_weight120_identity",
+    "swell_rider|mycelium30_quantize4",
+]
+
+REVIVAL_MLP_WARM_GENOMES = [
+    "mlp_assoc|top64_rank",
+    "mlp_assoc|stable64_rank",
+    "mlp_assoc|tail64_identity",
+    "mlp_assoc|tail96_rank",
+    "mlp_assoc|medoid64_pair_aug",
+    "mlp_assoc|sign_stability64_rank",
+    "mlp_assoc|pls_weight64_rank",
+    "mlp_assoc|testlike_stable64_rank",
+    "mlp_assoc|consensus64_rank",
+    "mlp_assoc|mycelium30_quantize4",
+    "mlp_assoc|invariant64_rank",
+    "mlp_assoc|both_clocks48_rank",
+]
+
+REVIVAL_MODES = (
+    "old-conflict-new-lens",
+    "old-tail-new-lens",
+    "old-stability-new-lens",
+    "mlp-dropout-grok",
+    "mlp-low-noise-grok",
+    "mlp-tail-grok",
+)
+
 
 def breaker_members(prefix: str, *, count: int, seed: int, gpu_frac: float, time_budget: float) -> list[dict]:
     rng = random.Random(seed)
@@ -280,6 +330,187 @@ def breaker_members(prefix: str, *, count: int, seed: int, gpu_frac: float, time
     return members
 
 
+def revival_members(prefix: str, *, count: int, seed: int, gpu_frac: float,
+                    time_budget: float) -> list[dict]:
+    """Build evidence-gated old-branch revival and neural grokking members.
+
+    These are not leaderboard-memory shortcuts. They only seed hypotheses that
+    the engine re-measures from scratch: old linear/tail/stability material is
+    tried through current testlike/topology courts, and MLP routes are marked as
+    incubators so they can run long without being allowed to ship directly.
+    """
+    rng = random.Random(seed)
+    gpu_frac = max(0.0, min(1.0, float(gpu_frac)))
+    old_modes = {
+        "old-conflict-new-lens": {
+            "WIDTH_BIAS_START": 0.42,
+            "POSITIONAL_BLOCK": 160,
+            "GREEDY_OLS_CAP": 80,
+            "PLSRANK_POOL": 512,
+            "STABSEL_POOL": 480,
+            "TESTLIKE_FRACS": [0.15, 0.30, 0.45],
+            "SHIFT_PENALTY": 0.80,
+            "WARM_GENOMES": REVIVAL_OLD_WARM_GENOMES,
+            "WIDE_WARM_GENOMES": REVIVAL_OLD_WARM_GENOMES[:8],
+        },
+        "old-tail-new-lens": {
+            "WIDTH_BIAS_START": 0.30,
+            "POSITIONAL_BLOCK": 192,
+            "GREEDY_OLS_CAP": 96,
+            "GREEDY_OLS_MIN_DELTA": 0.00004,
+            "GOV_LAMBDA_SCALE": 0.95,
+            "GOV_LAMBDA_MAX": 0.06,
+            "WARM_GENOMES": REVIVAL_OLD_WARM_GENOMES,
+            "WIDE_WARM_GENOMES": REVIVAL_OLD_WARM_GENOMES[:6],
+        },
+        "old-stability-new-lens": {
+            "WIDTH_BIAS_START": 0.62,
+            "POSITIONAL_BLOCK": 120,
+            "STABSEL_BOOT": 24,
+            "STABSEL_POOL": 512,
+            "PLSRANK_POOL": 512,
+            "CONSENSUS_BONUS": 0.75,
+            "REDUNDANCY_MIN_NEW_INFO": 0.08,
+            "WARM_GENOMES": REVIVAL_OLD_WARM_GENOMES,
+            "WIDE_WARM_GENOMES": REVIVAL_OLD_WARM_GENOMES[:10],
+        },
+    }
+    neural_modes = {
+        "mlp-dropout-grok": {
+            "WIDTH_BIAS_START": 0.72,
+            "MLP_DROPOUT": 0.18,
+            "MLP_PATIENCE": 22,
+            "MLP_MAX_ITER": 70,
+            "MLP_MAX_ROWS": 140_000,
+            "GPU_MLP_MAX_ITER": 80,
+            "GPU_MLP_MAX_ROWS": 180_000,
+            "GPU_MLP_HIDDEN": [192, 96, 48],
+            "MLP_PEARSON_LOSS_W": 0.55,
+            "WARM_GENOMES": REVIVAL_MLP_WARM_GENOMES + REVIVAL_OLD_WARM_GENOMES[:5],
+            "WIDE_WARM_GENOMES": REVIVAL_MLP_WARM_GENOMES[:8],
+        },
+        "mlp-low-noise-grok": {
+            "WIDTH_BIAS_START": 0.58,
+            "MLP_DROPOUT": 0.06,
+            "MLP_PATIENCE": 24,
+            "MLP_MAX_ITER": 80,
+            "MLP_MAX_ROWS": 150_000,
+            "GPU_MLP_MAX_ITER": 90,
+            "GPU_MLP_MAX_ROWS": 200_000,
+            "GPU_MLP_HIDDEN": [128, 64, 32],
+            "MLP_PEARSON_LOSS_W": 0.45,
+            "WARM_GENOMES": REVIVAL_MLP_WARM_GENOMES + REVIVAL_OLD_WARM_GENOMES[:4],
+            "WIDE_WARM_GENOMES": REVIVAL_MLP_WARM_GENOMES[:8],
+        },
+        "mlp-tail-grok": {
+            "WIDTH_BIAS_START": 0.36,
+            "POSITIONAL_BLOCK": 192,
+            "MLP_DROPOUT": 0.12,
+            "MLP_PATIENCE": 24,
+            "MLP_MAX_ITER": 75,
+            "MLP_MAX_ROWS": 150_000,
+            "GPU_MLP_MAX_ITER": 85,
+            "GPU_MLP_MAX_ROWS": 200_000,
+            "GPU_MLP_HIDDEN": [160, 80, 40],
+            "MLP_PEARSON_LOSS_W": 0.50,
+            "WARM_GENOMES": [
+                "mlp_assoc|tail64_identity",
+                "mlp_assoc|tail96_identity",
+                "mlp_assoc|tail120_rank",
+                "mlp_assoc|tail64_pair_aug",
+                "mlp_assoc|testlike_stable64_rank",
+                "mlp_assoc|sign_stability64_rank",
+            ] + REVIVAL_OLD_WARM_GENOMES[:6],
+            "WIDE_WARM_GENOMES": REVIVAL_MLP_WARM_GENOMES[:6],
+        },
+    }
+    base = {
+        "TIME_BUDGET_MIN": float(time_budget),
+        "RESERVE_MIN": 30.0,
+        "N_EXPLORERS": 14,
+        "LESSON_BUDGET": 38,
+        "MAX_SEASONS": 14,
+        "MAX_EPOCHS": 12,
+        "EVOLUTION_BUDGET": 104,
+        "EVOLUTION_OFFSPRING": 8,
+        "EVOLUTION_PATIENCE": 7,
+        "ATTENTION_POOL": 24,
+        "DIVE_BUDGET": 14,
+        "DREAM_REPLAYS": 240,
+        "CONFIG_GRID_TOPK": 12,
+        "ROBUST_HEDGE_BAND": 0.006,
+        "ROBUST_MAX_MEMBERS": 18,
+        "MAX_MEMBERS": 14,
+        "MAX_FAMILY_MEMBERS": 3,
+        "WIDTH_BIAS_HALFLIFE": 100,
+        "GREEDY_OLS_TR_ROWS": 12000,
+        "GREEDY_OLS_VA_ROWS": 8000,
+        "GREEDY_OLS_FALLBACK_K": 36,
+        "AUDITION_ALL_SKILLS": True,
+        "WIDE_PERSONA": True,
+        "SENSORY_ROSTER": True,
+        "WIDE_SEEDS": True,
+        "TESTLIKE_PARTITIONS": True,
+        "TESTLIKE_FEATURE_GATE": True,
+        "PLSRANK_FAMILY": True,
+        "SIGNSTAB_FAMILY": True,
+        "CONSENSUS_FAMILY": True,
+        "CONSENSUS_ENSEMBLE": True,
+        "FORENSIC_ENABLED": True,
+        "ROBUST_OOS_SELECT": True,
+        "SHIPPING_COURT": True,
+        "REVIVAL_BRANCH_MODE": True,
+        "REVIVAL_REQUIRE_CURRENT_EVIDENCE": True,
+    }
+    members: list[dict] = []
+    modes = list(REVIVAL_MODES)
+    for i in range(count):
+        mode = modes[i % len(modes)]
+        is_neural = mode in neural_modes
+        ov = dict(base)
+        ov.update(neural_modes[mode] if is_neural else old_modes[mode])
+        ov["SEED"] = rng.randrange(1_000, 2_000_000_000)
+        if is_neural:
+            ov.update({
+                "GROK_INCUBATION": True,
+                "GROK_BRANCH_MODE": mode,
+                "GROK_SHIP_ELIGIBLE": False,
+                "GROK_EXPECTED_DELAY": rng.choice((3, 4, 5)),
+                "GROK_BUDGET_SHARE": rng.choice((0.10, 0.12, 0.15)),
+                "STABILITY_NOISE": rng.choice((0.03, 0.05, 0.08)),
+            })
+        gpu = (is_neural and gpu_frac > 0.0) or (rng.random() < gpu_frac)
+        members.append({
+            "name": f"{prefix}-{i + 1:02d}-{mode}",
+            "gpu": bool(gpu),
+            "ov": ov,
+            "mode": "revival",
+            "revival_mode": mode,
+            "hypothesis": (
+                "Can old supported material become useful again when remeasured "
+                "through current testlike/topology/robust courts?"
+                if not is_neural else
+                "Can MLP/dropout routes grok delayed structure when seeded as "
+                "branch-only warm genomes and judged by current courts?"
+            ),
+            "translation_goal": (
+                "Revive only as fresh evidence: compare local/global impact, "
+                "public/private gap, false-agreement risk, and foundation stress."
+            ),
+            "signal_action": (
+                "retest_old_material_with_new_lenses"
+                if not is_neural else
+                "incubate_mlp_branch_then_retest"
+            ),
+            "trust_policy": (
+                "candidate_only_after_current_robust_court"
+                if not is_neural else
+                "branch_only_until_independent_current_evidence"
+            ),
+        })
+    return members
+
+
 def grok_members(prefix: str, *, count: int, seed: int, gpu_frac: float) -> list[dict]:
     rng = random.Random(seed)
     members: list[dict] = []
@@ -318,6 +549,8 @@ def grok_members(prefix: str, *, count: int, seed: int, gpu_frac: float) -> list
             "GROK_SHIP_ELIGIBLE": False,
             "GROK_EXPECTED_DELAY": rng.choice((2, 3, 4)),
             "GROK_BUDGET_SHARE": rng.choice((0.08, 0.10, 0.12)),
+            "WARM_GENOMES": REVIVAL_MLP_WARM_GENOMES + REVIVAL_OLD_WARM_GENOMES[:5],
+            "WIDE_WARM_GENOMES": REVIVAL_MLP_WARM_GENOMES[:8],
         }
         members.append({
             "name": f"{prefix}-{i + 1:02d}-{mode}",
@@ -765,6 +998,88 @@ def cmd_breaker(a) -> None:
           f"collect: python tools/fleet.py collect --out {out} --manifest {manifest} --submit")
 
 
+def cmd_revival(a) -> None:
+    """Build slim revival kernels that remeasure old material and MLP branches.
+
+    This is a GitHub-first counterpart to route-carve probing: the generated
+    kernels carry only config overrides, while the engine logic comes from the
+    package source. Neural revival members write incubation metadata and are
+    intentionally branch-only until an independent current-world retest passes.
+    """
+    template = Path(a.template).read_text()
+    out = Path(a.out)
+    user = kaggle_user()
+    out.mkdir(parents=True, exist_ok=True)
+    members = revival_members(
+        a.prefix,
+        count=a.count,
+        seed=a.seed,
+        gpu_frac=a.gpu_frac,
+        time_budget=a.time_budget,
+    )
+    manifest = Path(a.manifest) if a.manifest else out / f"{a.prefix}_manifest.json"
+    repo = _repo_with_ref(a.repo, a.repo_ref)
+    dataset_sources = list(a.dataset or [])
+    source_policy = a.source_policy or ("github_first" if a.internet else "wheel_first")
+    for m in members:
+        d = out / m["name"]
+        d.mkdir(parents=True, exist_ok=True)
+        shutil.rmtree(d / "__pycache__", ignore_errors=True)
+        config = {
+            "repo": repo,
+            "source_policy": source_policy,
+            "engine_dataset": a.engine_dataset,
+            "data_root": a.data_root,
+            "target": a.target,
+            "train": None,
+            "test": None,
+            "sample_submission": None,
+            "submission_target_col": None,
+            "metric": "auto",
+            "geometry": "auto",
+            "time_budget_min": a.time_budget,
+            "out": "/kaggle/working",
+        }
+        text = _inject_bootstrap_config(template, config, m["ov"])
+        (d / "kernel.py").write_text(text, encoding="utf-8")
+        (d / "kernel-metadata.json").write_text(
+            json.dumps(
+                _kernel_metadata(
+                    user=user,
+                    name=m["name"],
+                    title=f"DRW WX {m['name']}",
+                    gpu=bool(m["gpu"]),
+                    internet=bool(a.internet),
+                    competition=a.competition,
+                    datasets=dataset_sources,
+                ),
+                indent=2,
+                sort_keys=True,
+            ),
+            encoding="utf-8",
+        )
+        m["repo"] = repo
+        m["engine_dataset"] = a.engine_dataset
+        m["source_mode"] = source_policy
+        print(
+            f"revival {m['name']:34s} {'GPU' if m['gpu'] else 'CPU'} "
+            f"mode={m['revival_mode']} trust={m['trust_policy']} repo={repo}"
+        )
+    manifest.write_text(
+        json.dumps(
+            {"version": 1, "seed": a.seed, "doctrine": REVIVAL_DOCTRINE, "members": members},
+            indent=2,
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    print(f"\nmanifest: {manifest}\n"
+          f"push:    python tools/fleet.py push --out {out} --manifest {manifest}\n"
+          f"status:  python tools/fleet.py status --manifest {manifest}\n"
+          f"collect: python tools/fleet.py collect --out {out} --manifest {manifest} --submit\n"
+          f"grok:    python tools/fleet.py harvest-grok --out {out} --manifest {manifest}")
+
+
 def cmd_build(a) -> None:
     base = Path(a.kernel).read_text()
     out = Path(a.out)
@@ -1026,6 +1341,28 @@ def main(argv=None) -> int:
     br.add_argument("--manifest", default=None)
     br.set_defaults(internet=True)
     br.set_defaults(fn=cmd_breaker)
+    rv = sub.add_parser("revive")
+    rv.add_argument("--template", default=str(DEFAULT_BOOTSTRAP))
+    rv.add_argument("--out", default=str(DEFAULT_OUT))
+    rv.add_argument("--count", type=int, default=6)
+    rv.add_argument("--seed", type=int, default=20260615)
+    rv.add_argument("--prefix", default="revival")
+    rv.add_argument("--gpu-frac", type=float, default=0.50)
+    rv.add_argument("--time-budget", type=float, default=210.0)
+    rv.add_argument("--repo", default="git+https://github.com/Amarel-Taylor-Scott/worldexplorer.git")
+    rv.add_argument("--repo-ref", default="master")
+    rv.add_argument("--internet", dest="internet", action="store_true")
+    rv.add_argument("--offline", dest="internet", action="store_false")
+    rv.add_argument("--source-policy", choices=["github_first", "wheel_first", "github_only", "wheel_only"],
+                    default=None)
+    rv.add_argument("--engine-dataset", default=None)
+    rv.add_argument("--dataset", nargs="*", default=None)
+    rv.add_argument("--competition", default=COMP)
+    rv.add_argument("--data-root", default=None)
+    rv.add_argument("--target", default="label")
+    rv.add_argument("--manifest", default=None)
+    rv.set_defaults(internet=True)
+    rv.set_defaults(fn=cmd_revival)
     p = sub.add_parser("push"); p.add_argument("--out", default=str(DEFAULT_OUT))
     p.add_argument("--manifest", default=None)
     p.add_argument("--members", nargs="*", default=None); p.set_defaults(fn=cmd_push)

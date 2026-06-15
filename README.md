@@ -365,6 +365,23 @@ python tools/fleet.py breaker \
   --time-budget 180
 ```
 
+Old-material + MLP grokking revival fleet:
+
+```bash
+python tools/fleet.py revive \
+  --count 6 \
+  --prefix revival-old-mlp \
+  --gpu-frac 0.67 \
+  --time-budget 240
+```
+
+`revive` is intentionally conservative. It seeds older useful motifs and MLP
+dropout/noise warm genomes into generation zero, but every path is remeasured
+through the current validation worlds. Neural revival members are marked as
+grokking incubators: they may train longer and explore delayed structure, but
+they are branch-only until an independent current-world retest passes the robust
+OOS and shipping courts.
+
 Offline wheel-backed bootstrap:
 
 ```bash
