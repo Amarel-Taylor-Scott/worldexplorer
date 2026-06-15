@@ -186,6 +186,237 @@ The code does not store all of these as full durable tensors yet. Some are
 runtime objects and some are reports. The `tools/memory_matrices.py` direction is
 to turn more of them into durable matrices/operators that later runs can reuse.
 
+### Creative worldview: material, terrain, and reversible movement
+
+WorldExplorer's research metaphor is deliberate: a tabular dataset is not a
+clean spreadsheet of independent columns. It is a loose heterogeneous material
+field. Signal, proxy signal, confounding, missingness artifacts, local pockets,
+regime effects, delayed effects, duplicated measurements, and pure noise are
+mixed together like different grains in the same pile.
+
+The engine therefore studies material before deleting it. A suspicious feature
+or residual pocket can be:
+
+```text
+active
+suspect
+discounted
+region-limited
+route-limited
+quarantined
+revived
+discarded for one scope only
+```
+
+The raw evidence is never rewritten. "Moving material" means creating a derived
+coordinate system, local route, mask, blend, projection, or residual correction
+that treats one region differently while preserving provenance and reversal
+paths.
+
+Important material units:
+
+| Material unit | Meaning |
+|---|---|
+| Feature grain | One raw column or transformed column. |
+| Feature community | A group of columns that move together in target-free topology. |
+| Row region | A terrain/weather/pressure/testlike pocket of examples. |
+| Residual pocket | A localized region where predictions fail in a structured way. |
+| Route material | A model or submission's unique prediction direction. |
+| Projection material | A PCA/PLS/rank/quantized/latent coordinate system. |
+| Quarantined material | Signal not trusted globally, but preserved for scoped retest. |
+| Grokking material | Hard structure that may need longer training or a different representation. |
+
+Creative operations are treated as replayable operators:
+
+| Operation | ML equivalent |
+|---|---|
+| Sift | Select, rank, or filter features/material. |
+| Wash | Denoise, impute, shrink, or remove obvious artifacts. |
+| Grind | Rank, bin, quantize, or reduce resolution. |
+| Fold | Symmetry transforms, absolute folds, pair folds, latent encoders. |
+| Carve | Create a local mask, region split, or route-specific correction. |
+| Move | Reassign a region in a derived representation or route it to a specialist. |
+| Alloy | Combine features, routes, residuals, projections, or model families. |
+| Crystallize | Find stable feature communities or repeated route motifs. |
+| Quarantine | Discount without deleting; preserve scope, reason, and revival conditions. |
+| Revive | Retry old material through new validation worlds or new operators. |
+| Anneal | Train longer with regularization, replay, noise, dropout, or lower LR. |
+| Quench | Freeze and attack with robust validation before promotion. |
+
+The most important rule is that material movement is not a license to chase
+noise. A move must carry evidence:
+
+```text
+local gain
+global gain or bounded global damage
+neighbor/region side effects
+public/private or CV/forward gap
+false-agreement risk
+false-disagreement opportunity
+overfit risk
+foundation stress
+reversibility
+```
+
+Unsupported moves stay branch-only.
+
+### Carving patterns: pockets, grids, cubes, and lattices
+
+WorldExplorer can carve freeform pockets, but the safer long-term abstraction is
+a lattice atlas: project the data into a small set of meaningful coordinates and
+operate on cells instead of arbitrary blobs.
+
+Useful atlas axes include:
+
+```text
+stable target-alignment direction
+test-likeness / train-test shift
+residual pressure
+model disagreement
+uncertainty
+local density
+time / regime / terrain
+feature-community membership
+```
+
+The grid/cube is built over these atlas coordinates, not over raw 800D feature
+space. Each cell stores a material inventory:
+
+```text
+density
+mean prediction
+mean residual
+uncertainty
+model disagreement
+calibration error
+feature agreement/disagreement
+label-noise estimate
+testlike score
+route success history
+grokking potential
+```
+
+Then a candidate move can be cell-local:
+
+```text
+split a mixed cell
+merge neighboring stable cells
+smooth a jagged boundary
+route one cell to a specialist
+discount a suspicious material only inside a cell
+diffuse a residual correction across adjacent cells
+train longer on high-grokking cells
+restore quarantined material inside a newly stable cell
+```
+
+Cell moves are judged with neighbor regularization. A local improvement that
+breaks adjacent cells, increases surface roughness too much, or invalidates many
+old claims becomes a branch or a foundation challenge, not a default path.
+
+### False agreement, false disagreement, and foundation stress
+
+WorldExplorer assumes agreement can be fake. Two features or routes can agree
+because they share real signal, but also because they share leakage, missingness,
+collinearity, train-test shift, or the same overrepresented region.
+
+False agreement checks ask:
+
+```text
+Does agreement collapse after conditioning?
+Does it vanish in a time split?
+Is it driven by testlike shift?
+Is it just duplicate material from one feature community?
+Does dropping the dominant feature destroy the route?
+```
+
+False disagreement is also useful. Two signals can appear to conflict because a
+hidden region mixes two stable local laws. Those conflicts can become carve,
+split, specialist, or grokking candidates if the disagreement becomes coherent
+after conditioning on region or environment.
+
+Foundation stress tracks when local repairs imply the current coordinate system
+may be wrong:
+
+```text
+topology shock
+feature-graph shock
+partition shock
+new contradictions
+old claims invalidated
+boundary complexity growth
+bootstrap instability
+model-family rank flips
+```
+
+High local gain plus high foundation stress is not a normal promotion. It means:
+
+```text
+branch from an earlier world
+try a different coordinate system
+try a different partition
+try a different validation world
+or keep the move route-limited
+```
+
+### Grokking and long-horizon incubation
+
+Some hard material is not noise. It may be structure that needs a longer
+training horizon, a different representation, or a neural model with dropout,
+noise, and regularization. WorldExplorer treats this as a quarantined research
+lane, not as normal early-stopping patience.
+
+A grokking candidate earns runtime when it has evidence like:
+
+```text
+structured residuals
+low estimated label noise
+consistent gradient direction
+improving representation separation
+systematic model disagreement
+slow validation improvement under longer training
+similar regions solved by previous transformations
+```
+
+The `revive` fleet mode seeds MLP/dropout warm genomes and older successful
+motifs into generation zero. Neural members are explicitly marked
+`GROK_INCUBATION` and `GROK_SHIP_ELIGIBLE=False`: they may continue exploring,
+but they cannot become the shipped path unless a later independent robust court
+promotes them.
+
+### Revival, immune memory, and proof-carrying paths
+
+Failed or old paths are not erased. They become memory:
+
+```text
+survivors       -> warm starts and route priors
+decayers        -> anti-priors
+predator kills  -> hazard signatures
+weak witnesses  -> possible material for scoped revival
+old champions   -> retest candidates under new worlds
+```
+
+This is why `tools/fleet.py revive` exists. It asks whether older material that
+was weak globally, public/private unstable, or merely outdated can become useful
+when viewed through new topology, testlike partitions, residual lenses, or
+grokking schedules. The result must still pass current evidence gates.
+
+Every strong path should eventually carry a proof object:
+
+```text
+what it used
+where it worked
+where it failed
+what validation worlds judged it
+what risks remain
+what scope it is valid under
+what would invalidate it
+```
+
+This keeps the system from blindly trusting either the latest score or an old
+memory. The goal is a versioned computational atlas: states, operators, tensors,
+models, residual fields, route strengths, contradictions, and validation budget
+all stored as reusable scientific evidence.
+
 ### Row-space topology
 
 Rows are mapped into regions so the engine can distinguish global signal from
