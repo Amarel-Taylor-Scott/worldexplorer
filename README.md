@@ -625,6 +625,247 @@ python tools/fleet.py bootstrap \
   --time-budget 120
 ```
 
+## Claude Code / Research-Agent Handoff
+
+This section is intentionally pasteable into another coding agent. It gives the
+current research state, validated lessons, safe extension points, and guardrails.
+
+### Current research snapshot
+
+Date of this snapshot: **2026-06-15**.
+
+WorldExplorer is being developed on the DRW Crypto Market Prediction setting as
+a stress test for low-signal, shifting tabular data. Scores below are Kaggle
+public/private after-deadline probes. They are useful for research memory, but
+must not be used as training labels, target leakage, or direct optimization
+targets.
+
+| Submission / route | Private | Public | Lesson |
+|---|---:|---:|---|
+| External reference: `Fork of DRW Crypto Market Prediction Arunemble 2.0` | `0.11164` | `0.10872` | Reference only. Do not weight as WorldExplorer evidence unless source/artifacts are available. |
+| Historical `Rejoin - Version 10` | `0.08979` | `0.07615` | Historical teacher/reference. Useful as context, not direct proof of current engine behavior. |
+| `DRW WX gpu-wide - Version 2` / raw gpu-wide | `0.08548` | `0.06689` | Early strong WorldExplorer basin. |
+| `grok-atlas2-03-weird` route carves | about `0.08619` | about `0.06682` | Weird/topology branch carried reusable material. |
+| `breaker_long_master_01_tail_sharp` | `0.08661` | `0.07318` | Framework-native tail/sharp run improved public stability. |
+| `gpu-wide_rank_resid_add_a0.05` | `0.08740` | `0.07293` | First strong residual-add route from breaker/gpu-wide material. |
+| `gpu-wide_rank_resid_add_a0_05_pow15_resid_add_a0.05` | `0.08881` | `0.07469` | Best public-stable WorldExplorer candidate so far. |
+| `revive old breaker rank-reduce rank residual add 0.05` | `0.08919` | `0.07395` | Old material revival works. |
+| `revive old governor rank-reduce raw residual add 0.05` | `0.08906` | `0.07396` | Independent support for old-material revival. |
+| `revive old gpu-wide conflict rank residual add 0.05` | `0.08934` | `0.07399` | Current best WorldExplorer private score. |
+| `revive stage2 prior public stabilizer clip residual add 0.04` | `0.08839` | `0.07436` | Second-stage stacking preserved public somewhat but diluted private. |
+| `revive stage2 breaker/governor rank residual add 0.04` | `0.08814` / `0.08806` | `0.07241` / `0.07246` | Second-stage revival mostly hurt. Treat as hazard/branch evidence. |
+
+Current interpretation:
+
+```text
+Old material is not dead.
+First-layer revival is productive.
+Second-layer residual stacking is risky.
+Public-stable and private-sharp paths are related but not identical.
+MLP/grokking paths are worth incubating, but cannot ship without robust retest.
+```
+
+If choosing two submissions from this snapshot, the preferred pair is:
+
+```text
+private-best:
+  submission_submission_gpu-wide_raw_conflict_sub_a0_06_rank_resid_add_a0.05.csv
+  private=0.08934 public=0.07399
+
+public-stable hedge:
+  submission_submission_gpu-wide_rank_resid_add_a0_05_pow15_resid_add_a0.05.csv
+  private=0.08881 public=0.07469
+```
+
+### Active hypotheses
+
+1. **Old route material can revive under new operators.**
+   The revival probes show old gpu-wide/governor/breaker routes still contain
+   usable signal when viewed through current residual/rank lenses.
+
+2. **One layer of surgery helps; two layers can over-smooth or overfit.**
+   The stage-2 carves reduced private score. Future work should test first-layer
+   moves, smaller alphas, or different axes before stacking more residual edits.
+
+3. **Public/private divergence is a terrain signal.**
+   Public-stable candidates are not necessarily private-best. Treat the gap as
+   a validation-world disagreement, not as random noise.
+
+4. **MLP/dropout grokking may still matter.**
+   Earlier competition versions suggested MLPs with noise/dropout could do well.
+   Current MLP branches must be incubated behind `GROK_INCUBATION` and promoted
+   only after robust retest.
+
+5. **Lattice/cell carving is the next safer form of material movement.**
+   Instead of arbitrary pockets, project into atlas coordinates and operate on
+   cells with adjacency, support, roughness, and neighbor damage checks.
+
+### Current creative strategy stack
+
+WorldExplorer's strategy stack is:
+
+```text
+row topology
+feature topology
+material inventory
+bounded viewports
+model/skill diversity
+route-carve output-space probes
+old-material revival
+grokking incubation
+false-agreement checks
+foundation-stress checks
+validation-budget accounting
+proof-carrying paths
+computational atlas memory
+```
+
+Specific methods already in the code or tooling:
+
+```text
+TerrainAtlas
+WeatherGauge
+PressureGauge
+BeaconField
+FeatureGraph
+testlike partitions
+sign-stability rankers
+PLS-weight rankers
+consensus feature-family rankers
+greedy OLS tail/order motifs
+Bayesian ridge / ARD / PLS paths
+GPU ridge swarm
+small MLP skill with dropout and Pearson+MSE loss
+predator null/regime attacks
+forensic robust OOS selection
+shipping court
+route_carve residual/rank/clip/tanh/pow transforms
+revive fleet mode
+grokking incubation reports
+memory matrices / computational atlas artifacts
+```
+
+### Safe improvement modules to add
+
+External agents should prefer additive, flag-gated modules. Good targets:
+
+| Module | Purpose | Likely files |
+|---|---|---|
+| `LatticeAtlas` | Build grid/cube/cell atlas over stable coordinates; store cell stats and adjacency. | `engine_src/06_viewports__*.py`, `tools/memory_matrices.py` |
+| `CellSurgeryCourt` | Score cell-local moves by local gain, neighbor damage, roughness, support, and foundation stress. | `engine_src/15_*`, `tools/memory_matrices.py` |
+| `FalseAgreementCourt` | Detect agreement caused by collinearity, shift, missingness, or duplicate communities. | `engine_src/06_viewports__*.py`, `engine_src/12_*` |
+| `FalseDisagreementMiner` | Find conflicts that become stable after region splits. | `engine_src/06_viewports__*.py`, `engine_src/12_*` |
+| `GrokkingSentinel` | Let MLP/neural branches run longer when internal structure improves despite flat validation. | `engine_src/01_configuration.py`, `engine_src/07_skills__*.py`, `tools/fleet.py` |
+| `RouteRevivalPlanner` | Generate first-layer revival candidates while penalizing over-stacked residual surgery. | `tools/route_carve.py`, `tools/telemetry_guidance.py` |
+| `ValidationBudgetLedger` | Discount repeatedly reused validation surfaces and correlated public/private probes. | `tools/memory_matrices.py` |
+| `ProofCarryingPath` | Emit machine-readable evidence/risk/scope certificates for shipped paths. | `engine_src/12_*`, `tools/memory_matrices.py` |
+| `WorldForgeSyntheticTests` | Synthetic traps for null worlds, leakage, collinearity, hidden subgroup, label delay, and train/test shift. | `tests/`, `tools/` |
+
+### How to work safely
+
+Use this protocol for code changes:
+
+```text
+1. Read README.md, RESEARCH_AGENT_BRIEF.md, SOURCE_OF_TRUTH.md.
+2. Identify one small module or guardrail to add.
+3. Prefer a flag-gated no-op default or report-only first version.
+4. If changing engine behavior, edit engine_src/ first.
+5. Run python sync_engine.py after engine_src edits.
+6. Add tests for synthetic failure modes, not only happy paths.
+7. Do not remove existing validators, predators, courts, ledgers, or reports.
+8. Do not convert leaderboard results into training features or labels.
+9. Do not let grokking branches ship directly.
+10. Do not make Kaggle kernels monolithic; keep logic in GitHub.
+```
+
+Recommended local checks:
+
+```bash
+python3 -m py_compile tools/fleet.py kaggle/bootstrap_kernel.py
+../.venv/bin/python -m pytest \
+  tests/test_adapter_kaggle.py \
+  tests/test_telemetry_guidance.py \
+  tests/test_memory_guardrails.py \
+  tests/test_fleet_revival.py
+python tools/source_audit.py
+```
+
+If engine modules are changed:
+
+```bash
+python sync_engine.py
+python3 -m py_compile worldexplorer/_engine.py
+```
+
+### What not to do
+
+Do not:
+
+```text
+delete validators because they block exciting paths
+optimize directly to public/private score rows
+turn old leaderboard winners into unquestioned priors
+ship MLP/grokking branches without robust court promotion
+mutate raw data to "move material"
+hide logic in Kaggle notebooks
+replace the engine with one giant monolith
+drop quarantined material without preserving reversal conditions
+add high-cost modules without budget guards
+judge a path by one scalar score only
+```
+
+### Suggested first tasks for an external coding agent
+
+1. Add `LatticeAtlas` as a report-only artifact:
+
+```text
+inputs: existing transformed coordinates, residuals, uncertainty, testlike score
+outputs: cell ids, cell adjacency, cell density, cell residual, cell disagreement
+status: report-only, no model behavior change
+tests: deterministic synthetic grid with one high-residual cell
+```
+
+2. Add a `route_carve` anti-stacking penalty:
+
+```text
+penalize candidates whose route name already contains multiple residual layers
+prefer first-layer revival unless direct evidence says stacking works
+write stack_depth into route_carve_manifest.csv
+```
+
+3. Add `proof_carrying_paths.jsonl` details:
+
+```text
+source route
+operator
+public/private or forward/sealed evidence
+known risks
+scope
+invalidation conditions
+required next retest
+```
+
+4. Add grokking report fields:
+
+```text
+train-loss trend if available
+validation plateau length
+MLP dropout/noise settings
+warm genomes used
+ship_eligible=false
+promotion gates required
+```
+
+5. Add synthetic tests:
+
+```text
+null world: no false promotion
+hidden subgroup: false disagreement becomes carve candidate
+duplicate features: false agreement detected
+train/test shift: testlike gate downweights shifted feature
+tiny pocket: high local gain stays branch-only
+```
+
 ### What research agents should inspect
 
 For adversarial validation and improvement work, start with:
